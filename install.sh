@@ -12,7 +12,7 @@ clear
 
 # Banner
 echo -e "${BLUE}================================${NC}"
-echo -e "${GREEN}   VPN Auto Installation Script${NC}"
+echo -e "${GREEN}   Afterlife VPN Auto Installer${NC}"
 echo -e "${BLUE}================================${NC}"
 echo ""
 
@@ -48,7 +48,7 @@ echo -e "${GREEN}[3/8] Downloading setup modules...${NC}"
 mkdir -p /usr/local/vpnscript/setup
 mkdir -p /usr/local/vpnscript/menu
 
-# Base URL for your GitHub repo
+# Base URL for GitHub repo
 BASE_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevvpn/main"
 
 # Download all setup scripts
@@ -101,12 +101,14 @@ echo -e "${BLUE}================================${NC}"
 echo ""
 echo -e "Domain: ${YELLOW}$domain${NC}"
 echo -e "Services installed:"
-echo -e "  - SSH WebSocket"
-echo -e "  - VMess (V2Ray)"
-echo -e "  - Hysteria 2"
-echo -e "  - UDP Custom (Port 53)"
-echo -e "  - Dropbear SSH"
-echo -e "  - TCP BBR enabled"
+echo -e "  ✓ SSH WebSocket"
+echo -e "  ✓ VMess (V2Ray)"
+echo -e "  ✓ Hysteria 2"
+echo -e "  ✓ UDP Custom (Port 53)"
+echo -e "  ✓ Dropbear SSH"
+echo -e "  ✓ TCP BBR enabled"
 echo ""
 echo -e "Type ${GREEN}menu${NC} to access the management panel"
+echo ""
+echo -e "${YELLOW}Server IP: $(curl -s ifconfig.me)${NC}"
 echo ""
