@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Enforce Root Privileges
+if [[ $EUID -ne 0 ]]; then
+   echo -e "\033[0;31mError: This script must be run as root.\033[0m"
+   exit 1
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -15,7 +21,7 @@ if [ -f /usr/local/afterlifevpn/config.conf ]; then
     source /usr/local/afterlifevpn/config.conf
 fi
 
-# Get system information
+# Get system information (Optimized to reduce subshells)
 get_system_info() {
     HOSTNAME=$(hostname)
     PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "N/A")
@@ -24,12 +30,11 @@ get_system_info() {
     CPU_CORES=$(nproc)
     CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
     CPU_USAGE_INT=${CPU_USAGE%.*}
-    TOTAL_RAM=$(free -m | awk 'NR==2{print $2}')
-    USED_RAM=$(free -m | awk 'NR==2{print $3}')
+    
+    read TOTAL_RAM USED_RAM <<< $(free -m | awk 'NR==2{print $2, $3}')
     RAM_PERCENT=$((USED_RAM * 100 / TOTAL_RAM))
-    TOTAL_DISK=$(df -h / | awk 'NR==2{print $2}')
-    USED_DISK=$(df -h / | awk 'NR==2{print $3}')
-    DISK_PERCENT=$(df / | awk 'NR==2{print $5}' | sed 's/%//')
+    
+    read TOTAL_DISK USED_DISK DISK_PERCENT <<< $(df -h / | awk 'NR==2{print $2, $3, $5}' | tr -d '%')
 }
 
 # Create progress bar
@@ -44,9 +49,9 @@ create_bar() {
     printf "]"
 }
 
-# Check service status
+# Check service status (Quoted variables)
 check_service() {
-    if systemctl is-active --quiet $1 2>/dev/null; then
+    if systemctl is-active --quiet "$1" 2>/dev/null; then
         echo -e "${GREEN}●${NC}"
     else
         echo -e "${RED}○${NC}"
@@ -57,19 +62,16 @@ check_service() {
 count_users() {
     local total=0
     
-    # Count SSH users
     if [ -f /usr/local/afterlifevpn/users/ssh_users.txt ]; then
         local ssh_users=$(wc -l < /usr/local/afterlifevpn/users/ssh_users.txt)
         total=$((total + ssh_users))
     fi
     
-    # Count VMess users
     if [ -f /usr/local/afterlifevpn/users/xray_users.txt ]; then
         local xray_users=$(wc -l < /usr/local/afterlifevpn/users/xray_users.txt)
         total=$((total + xray_users))
     fi
     
-    # Count Hysteria users
     if [ -f /usr/local/afterlifevpn/users/hysteria_users.txt ]; then
         local hyst_users=$(wc -l < /usr/local/afterlifevpn/users/hysteria_users.txt)
         total=$((total + hyst_users))
@@ -95,40 +97,34 @@ show_dashboard() {
     clear
     get_system_info
     
-    # Header
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
     echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
     echo -e "${CYAN}║${NC} ${WHITE}› AFTERLIFE › Core${NC}                                       ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
     
-    # Server Information
     echo -e "  ${WHITE}Server:${NC} ${DOMAIN:-$HOSTNAME} ${CYAN}($PUBLIC_IP)${NC}"
     echo -e "  ${WHITE}OS:${NC}     $OS_VERSION"
     echo -e "  ${WHITE}Uptime:${NC} $UPTIME"
     
-    # System Resources
     echo -e "  ${WHITE}CPU:${NC}  $(create_bar $CPU_USAGE_INT) ${CPU_USAGE_INT}% ${CYAN}($CPU_CORES Core)${NC}"
     echo -e "  ${WHITE}RAM:${NC}  $(create_bar $RAM_PERCENT) ${RAM_PERCENT}% ${CYAN}(${USED_RAM}MB / ${TOTAL_RAM}MB)${NC}"
     echo -e "  ${WHITE}Disk:${NC} $(create_bar $DISK_PERCENT) ${DISK_PERCENT}% ${CYAN}($USED_DISK / $TOTAL_DISK)${NC}"
     
-    # Active Services
     echo -e "  ${WHITE}[ Active Services ]${NC}"
     echo -e "  $(check_service xray) ${WHITE}Xray${NC}   $(check_service nginx) ${WHITE}Nginx${NC}   $(check_service hysteria) ${WHITE}Hysteria2${NC}   $(check_service wg-quick@wg0) ${WHITE}WireGuard${NC}"
     echo -e "  $(check_service ssh) ${WHITE}SSH${NC}    $(check_service dropbear) ${WHITE}Dropbear${NC}   $(check_service squid) ${WHITE}Squid${NC}   $(check_service danted) ${WHITE}Dante${NC}"
     
-    # User Count
     local user_count=$(count_users)
     echo -e "  ${WHITE}Registered Clients:${NC} ${GREEN}$user_count${NC} total across protocols"
     
-    # Main Menu
     echo -e "${CYAN}╭────────────────────────────────────────────────────────╮${NC}"
     echo -e "${CYAN}│${NC} ${WHITE}Protocol & System Management${NC}                           ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}                                                        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}1)${NC} SSH & Dropbear           ${GREEN}6)${NC} Subscriptions          ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}2)${NC} Xray Core Protocols      ${GREEN}7)${NC} TCP BBR Booster        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)        ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN            ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}1)${NC} SSH & Dropbear            ${GREEN}6)${NC} Subscriptions          ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}2)${NC} Xray Core Protocols       ${GREEN}7)${NC} TCP BBR Booster        ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)         ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN             ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN       ${GREEN}10)${NC} Domain & Cert           ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
@@ -138,7 +134,6 @@ show_dashboard() {
 # ============================================================================
 # SSH & DROPBEAR MANAGEMENT
 # ============================================================================
-
 menu_ssh() {
     while true; do
         show_header "› SSH › Management"
@@ -174,37 +169,36 @@ menu_ssh() {
 create_ssh_user() {
     show_header "› SSH › Create Account"
     
+    local username password days max_login
     read -p "  Username: " username
+    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter to continue..."; return; fi
     read -p "  Password: " password
     read -p "  Expiry (days): " days
     read -p "  Max Login (devices): " max_login
     max_login=${max_login:-2}
     
     if id "$username" &>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User already exists!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User already exists!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    useradd -M -s /bin/false -e $(date -d "+$days days" +%Y-%m-%d) $username
+    useradd -M -s /bin/false -e $(date -d "+$days days" +%Y-%m-%d) "$username"
     echo "$username:$password" | chpasswd
     
-    # Add to proxy auth
     if command -v htpasswd &> /dev/null; then
-        htpasswd -b /etc/squid/passwd $username $password 2>/dev/null
+        htpasswd -b /etc/squid/passwd "$username" "$password" 2>/dev/null
     fi
     
     mkdir -p /usr/local/afterlifevpn/users
     echo "$username|$password|$(date -d "+$days days" +%Y-%m-%d)|$(date +%Y-%m-%d)|$max_login" >> /usr/local/afterlifevpn/users/ssh_users.txt
     
     get_system_info
-    SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
-    EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
-    WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
-    DROPBEAR_PORT=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
-    PUBKEY=$(echo -n "$username$password" | sha256sum | awk '{print $1}')
+    local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
+    local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
+    local WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
+    local DROPBEAR_PORT=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
+    local PUBKEY=$(echo -n "$username$password" | sha256sum | awk '{print $1}')
     
     clear
     echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
@@ -213,10 +207,8 @@ create_ssh_user() {
     echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
     echo -e " ${WHITE}Password${NC}     : ${GREEN}$password${NC}"
     echo -e " ${WHITE}Max Login${NC}    : ${YELLOW}$max_login Device(s)${NC}"
-    echo -e " ${WHITE}Data Limit${NC}   : ${YELLOW}Unlimited${NC}"
     echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
     echo -e " ${WHITE}Host${NC}         : ${CYAN}$SERVER_HOST${NC}"
-    echo -e " ${WHITE}Nameserver${NC}   : ${CYAN}ns-$SERVER_HOST${NC}"
     echo -e " ${WHITE}PubKey${NC}       : ${PURPLE}$PUBKEY${NC}"
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
     echo -e " ${WHITE}► HTTP & SOCKS PROXY:${NC}"
@@ -225,7 +217,6 @@ create_ssh_user() {
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
     echo -e " ${WHITE}► DIRECT CONNECTIONS:${NC}"
     echo -e " ${WHITE}TLS Ports${NC}    : ${GREEN}443, 2053, 2083, 2087, 2096, 8443${NC}"
-    echo -e " ${WHITE}HTTP Ports${NC}   : ${GREEN}80, 8080, 2052, 2082, 2086, 2095${NC}"
     echo -e " ${WHITE}SSH Default${NC}  : ${CYAN}$SERVER_HOST:22@$username:$password${NC}"
     echo -e " ${WHITE}Dropbear${NC}     : ${CYAN}$SERVER_HOST:$DROPBEAR_PORT@$username:$password${NC}"
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
@@ -234,86 +225,70 @@ create_ssh_user() {
     echo -e " ${WHITE}Dropbear Path${NC}: ${GREEN}/dropbear${NC} ${YELLOW}(Port $WS_PORT)${NC}"
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
     
-    CONNECTION_STRING="ssh://$username:$password@$SERVER_HOST:22"
-    
+    local CONNECTION_STRING="ssh://$username:$password@$SERVER_HOST:22"
     if command -v qrencode &> /dev/null; then
-        echo ""
-        echo -e " ${WHITE}[QR CODE - SSH Connection]${NC}"
+        echo -e "\n ${WHITE}[QR CODE - SSH Connection]${NC}"
         qrencode -t ANSIUTF8 "$CONNECTION_STRING"
-    else
-        echo ""
-        echo -e " ${YELLOW}[Install qrencode for QR code: apt install qrencode]${NC}"
     fi
     
-    echo ""
-    echo -e " ${GREEN}✓ Account created successfully!${NC}"
-    echo -e " ${YELLOW}⚠ Save this information!${NC}"
-    echo ""
+    echo -e "\n ${GREEN}✓ Account created successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
 delete_ssh_user() {
     show_header "› SSH › Delete Account"
+    local username
     read -p "  Username to delete: " username
+    if [[ -z "$username" ]]; then return; fi
     
     if ! id "$username" &>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User does not exist!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    pkill -u $username 2>/dev/null
-    userdel -r $username 2>/dev/null
+    pkill -u "$username" 2>/dev/null
+    userdel -r "$username" 2>/dev/null
     sed -i "/^$username|/d" /usr/local/afterlifevpn/users/ssh_users.txt 2>/dev/null
     
-    # Remove from proxy auth
     if [ -f /etc/squid/passwd ]; then
-        htpasswd -D /etc/squid/passwd $username 2>/dev/null
+        htpasswd -D /etc/squid/passwd "$username" 2>/dev/null
     fi
     
-    echo ""
-    echo -e "  ${GREEN}✓ User '$username' deleted successfully!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ User '$username' deleted successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
 extend_ssh_user() {
     show_header "› SSH › Extend Account"
+    local username days
     read -p "  Username: " username
+    if [[ -z "$username" ]]; then return; fi
     
     if ! id "$username" &>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User does not exist!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
     read -p "  Add days: " days
-    chage -E $(date -d "+$days days" +%Y-%m-%d) $username
+    chage -E $(date -d "+$days days" +%Y-%m-%d) "$username"
     
-    echo ""
-    echo -e "  ${GREEN}✓ Account extended by $days days!${NC}"
-    echo -e "  ${WHITE}New expiry:${NC} $(date -d "+$days days" +"%Y-%m-%d")"
-    echo ""
+    echo -e "\n  ${GREEN}✓ Account extended by $days days!${NC}"
+    echo -e "  ${WHITE}New expiry:${NC} $(date -d "+$days days" +"%Y-%m-%d")\n"
     read -p "  Press enter to continue..."
 }
 
 list_ssh_users() {
     show_header "› SSH › User List"
-    
     if [ ! -f /usr/local/afterlifevpn/users/ssh_users.txt ]; then
-        echo -e "  ${YELLOW}No users found${NC}"
-        echo ""
+        echo -e "  ${YELLOW}No users found${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
     echo -e "  ${WHITE}Username${NC}     ${WHITE}Created${NC}        ${WHITE}Expires${NC}        ${WHITE}Status${NC}"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────${NC}"
-    
     while IFS='|' read -r user pass expiry created max_login; do
         local status="${GREEN}Active${NC}"
         if [[ $(date -d "$expiry" +%s) -lt $(date +%s) ]]; then
@@ -321,128 +296,102 @@ list_ssh_users() {
         fi
         printf "  %-12s %-14s %-14s %b\n" "$user" "$created" "$expiry" "$status"
     done < /usr/local/afterlifevpn/users/ssh_users.txt
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Check User Login (CLEAN VERSION)
 check_user_login() {
     show_header "› SSH › User Login Status"
-    
+    local username
     read -p "  Username: " username
+    if [[ -z "$username" ]]; then return; fi
     
     if ! id "$username" &>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User does not exist!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    echo ""
-    echo -e "  ${WHITE}Checking login for:${NC} $username"
+    echo -e "\n  ${WHITE}Checking login for:${NC} $username"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────${NC}"
-    
     if who | grep -q "^$username "; then
-        echo -e "  ${GREEN}● User is currently logged in${NC}"
-        echo ""
-        who | grep "^$username " | while read line; do
-            echo -e "  $line"
-        done
+        echo -e "  ${GREEN}● User is currently logged in${NC}\n"
+        who | grep "^$username " | while read line; do echo -e "  $line"; done
     else
         echo -e "  ${YELLOW}○ User is not logged in${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Change Dropbear Port (CLEAN VERSION)
 change_dropbear_port() {
     show_header "› SSH › Change Dropbear Port"
-    
     local current_port=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
-    echo -e "  ${WHITE}Current port:${NC} $current_port"
-    echo ""
+    local new_port
+    echo -e "  ${WHITE}Current port:${NC} $current_port\n"
     read -p "  Enter new port: " new_port
+    
+    new_port=${new_port:-$current_port}
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]]; then echo -e "\n  ${RED}✗ Invalid port!${NC}\n"; read -p "  Press enter..."; return; fi
     
     sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=$new_port/" /etc/default/dropbear
     sed -i "s/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS=\"-p $new_port\"/" /etc/default/dropbear
     systemctl restart dropbear
     
-    echo ""
-    echo -e "  ${GREEN}✓ Dropbear port changed to $new_port${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ Dropbear port changed to $new_port${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Change WebSocket Port (CLEAN VERSION)
 change_websocket_port() {
     show_header "› SSH › Change WebSocket Port"
-    
     local current_port=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
-    echo -e "  ${WHITE}Current port:${NC} $current_port"
-    echo ""
+    local new_port
+    echo -e "  ${WHITE}Current port:${NC} $current_port\n"
     read -p "  Enter new port: " new_port
+    
+    new_port=${new_port:-$current_port}
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]]; then echo -e "\n  ${RED}✗ Invalid port!${NC}\n"; read -p "  Press enter..."; return; fi
     
     sed -i "s/start_server = websockets.serve(proxy, \"0.0.0.0\", .*/start_server = websockets.serve(proxy, \"0.0.0.0\", $new_port, ssl=ssl_context)/" /usr/local/bin/ws-ssh.py
     echo "$new_port" > /usr/local/afterlifevpn/ws-port.conf
     systemctl restart ws-ssh
     
-    echo ""
-    echo -e "  ${GREEN}✓ WebSocket port changed to $new_port${NC}"
-    echo -e "  ${YELLOW}⚠ Update your firewall rules!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ WebSocket port changed to $new_port${NC}"
+    echo -e "  ${YELLOW}⚠ Update your firewall rules!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Monitor Connections (CLEAN VERSION)
 monitor_connections() {
     show_header "› SSH › Active Connections"
-    
     echo -e "  ${YELLOW}SSH Connections:${NC}"
     local ssh_count=$(netstat -tnp 2>/dev/null | grep ':22' | grep ESTABLISHED | wc -l)
     echo -e "  Total: $ssh_count"
     netstat -tnp 2>/dev/null | grep ':22' | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr | head -10
     
-    echo ""
-    echo -e "  ${YELLOW}Dropbear Connections:${NC}"
+    echo -e "\n  ${YELLOW}Dropbear Connections:${NC}"
     local drop_count=$(netstat -tnp 2>/dev/null | grep dropbear | grep ESTABLISHED | wc -l)
     echo -e "  Total: $drop_count"
     netstat -tnp 2>/dev/null | grep dropbear | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr | head -10
     
-    echo ""
-    echo -e "  ${YELLOW}Logged in Users:${NC}"
+    echo -e "\n  ${YELLOW}Logged in Users:${NC}"
     who
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Edit SSH Banner (CLEAN VERSION)
 edit_ssh_banner() {
     show_header "› SSH › Banner"
-    
     echo -e "  ${WHITE}Current Banner (/etc/issue.net):${NC}"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────${NC}"
     cat /etc/issue.net 2>/dev/null || echo "  No banner set"
-    echo -e "  ${CYAN}──────────────────────────────────────────────────────${NC}"
-    echo ""
+    echo -e "  ${CYAN}──────────────────────────────────────────────────────${NC}\n"
     echo -e "  ${GREEN}1)${NC} Edit Banner with Nano"
     echo -e "  ${GREEN}2)${NC} Reset to Default AFTERLIFE Banner"
-    echo -e "  ${GREEN}3)${NC} Disable Banner"
-    echo ""
+    echo -e "  ${GREEN}3)${NC} Disable Banner\n"
     read -p "  Select [1-3] or [Enter to return]: " banner_choice
     
     case $banner_choice in
-        1)
-            nano /etc/issue.net
-            systemctl restart dropbear ssh
-            echo ""
-            echo -e "  ${GREEN}✓ Banner updated!${NC}"
-            sleep 2
-            ;;
+        1) nano /etc/issue.net; systemctl restart dropbear ssh; echo -e "\n  ${GREEN}✓ Banner updated!${NC}"; sleep 2 ;;
         2)
             cat > /etc/issue.net <<'EOF'
 ════════════════════════════════════════
@@ -452,22 +401,14 @@ edit_ssh_banner() {
  No Hacking | No Spam
 ════════════════════════════════════════
 EOF
-            systemctl restart dropbear ssh
-            echo ""
-            echo -e "  ${GREEN}✓ Banner reset to default!${NC}"
-            sleep 2
-            ;;
-        3)
-            echo "" > /etc/issue.net
-            systemctl restart dropbear ssh
-            echo ""
-            echo -e "  ${GREEN}✓ Banner disabled!${NC}"
-            sleep 2
-            ;;
+            systemctl restart dropbear ssh; echo -e "\n  ${GREEN}✓ Banner reset to default!${NC}"; sleep 2 ;;
+        3) echo "" > /etc/issue.net; systemctl restart dropbear ssh; echo -e "\n  ${GREEN}✓ Banner disabled!${NC}"; sleep 2 ;;
     esac
 }
 
-# Submenu: Xray Protocols (CLEAN VERSION)
+# ============================================================================
+# XRAY (VMESS) MANAGEMENT
+# ============================================================================
 menu_xray() {
     while true; do
         show_header "› Xray › Management"
@@ -485,118 +426,126 @@ menu_xray() {
             2) create_vmess_user ;;
             3) delete_vmess_user ;;
             4) list_vmess_users ;;
-            5) systemctl restart xray; echo "  ${GREEN}✓ Xray restarted${NC}"; sleep 2 ;;
+            5) systemctl restart xray; echo -e "  ${GREEN}✓ Xray restarted${NC}"; sleep 2 ;;
             0) break ;;
             *) ;;
         esac
     done
 }
 
-# Function: Show VMess Config (CLEAN VERSION)
 show_vmess_config() {
     show_header "› Xray › VMess Configuration"
-    
     if [ -f /usr/local/afterlifevpn/vmess-config.txt ]; then
         cat /usr/local/afterlifevpn/vmess-config.txt
     else
         echo -e "  ${YELLOW}No configuration found${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Create VMess User
 create_vmess_user() {
     show_header "› Xray › Create VMess Account"
-    
+    local username days
     read -p "  Username: " username
+    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
     read -p "  Expiry (days): " days
     
-    # Check if user exists
     if grep -q "^$username|" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User already exists!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User already exists!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    # Create user using helper script
-    UUID=$(bash /usr/local/afterlifevpn/setup/xray-user.sh add "$username" "$days")
+    local UUID=$(bash /usr/local/afterlifevpn/setup/xray-user.sh add "$username" "$days")
     
-    # Get server info
     get_system_info
-    SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
-    EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
+    local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
+    local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
     
-    # Display account info
+    # Beautiful JSON Base64 Generation
+    local VMESS_JSON=$(cat <<EOF
+{
+  "v": "2",
+  "ps": "${username}-AFTERLIFE",
+  "add": "${SERVER_HOST}",
+  "port": "443",
+  "id": "${UUID}",
+  "aid": "0",
+  "scy": "auto",
+  "net": "ws",
+  "type": "none",
+  "host": "${SERVER_HOST}",
+  "path": "/vmess",
+  "tls": "tls",
+  "sni": "${SERVER_HOST}",
+  "alpn": ""
+}
+EOF
+)
+    local VMESS_LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
+    
     clear
     echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                        ${WHITE}VMESS ACCOUNT CREATED${NC}                       ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}                       ${WHITE}VMESS ACCOUNT CREATED${NC}                        ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────────────────╯${NC}"
     echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
     echo -e " ${WHITE}UUID${NC}         : ${GREEN}$UUID${NC}"
     echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
-    echo -e " ${WHITE}Host${NC}         : ${CYAN}$SERVER_HOST${NC}"
+    echo -e " ${WHITE}Server${NC}       : ${CYAN}$SERVER_HOST${NC}"
     echo -e " ${WHITE}Port${NC}         : ${CYAN}443${NC}"
-    echo -e " ${WHITE}Network${NC}      : ${CYAN}ws${NC}"
+    echo -e " ${WHITE}Network${NC}      : ${CYAN}ws (TLS)${NC}"
     echo -e " ${WHITE}Path${NC}         : ${CYAN}/vmess${NC}"
-    echo -e " ${WHITE}TLS${NC}          : ${GREEN}Enabled${NC}"
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ${WHITE}VMess Link${NC}   : ${YELLOW}vmess://$UUID@$SERVER_HOST:443${NC}"
-    echo ""
-    echo -e " ${GREEN}✓ VMess account created successfully!${NC}"
-    echo ""
+    echo -e " ⚡ ${WHITE}STANDARD LINK${NC}"
+    echo -e "   ${YELLOW}$VMESS_LINK${NC}"
+    
+    if command -v qrencode &> /dev/null; then
+        echo -e "\n ${WHITE}[QR CODE - VMess Connection]${NC}"
+        qrencode -t ANSIUTF8 "$VMESS_LINK"
+    fi
+    
+    echo -e "\n ${GREEN}✓ VMess account created successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Delete VMess User
 delete_vmess_user() {
     show_header "› Xray › Delete VMess Account"
-    
+    local username
     read -p "  Username to delete: " username
+    if [[ -z "$username" ]]; then return; fi
     
     if ! grep -q "^$username|" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User does not exist!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    # Delete user
     bash /usr/local/afterlifevpn/setup/xray-user.sh delete "$username"
-    
-    echo ""
-    echo -e "  ${GREEN}✓ User '$username' deleted successfully!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ User '$username' deleted successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: List VMess Users
 list_vmess_users() {
     show_header "› Xray › VMess User List"
-    
     if [ ! -f /usr/local/afterlifevpn/users/xray_users.txt ]; then
-        echo -e "  ${YELLOW}No users found${NC}"
-        echo ""
+        echo -e "  ${YELLOW}No users found${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    echo -e "  ${WHITE}Username${NC}     ${WHITE}UUID${NC}                                  ${WHITE}Expires${NC}"
+    echo -e "  ${WHITE}Username${NC}     ${WHITE}UUID${NC}                                   ${WHITE}Expires${NC}"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────${NC}"
-    
     while IFS='|' read -r user uuid expiry created; do
         printf "  %-12s %-38s %s\n" "$user" "$uuid" "$expiry"
     done < /usr/local/afterlifevpn/users/xray_users.txt
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Submenu: Hysteria 2 (CLEAN VERSION)
+# ============================================================================
+# HYSTERIA 2 MANAGEMENT
+# ============================================================================
 menu_hysteria() {
     while true; do
         show_header "› Hysteria › Management"
@@ -616,122 +565,126 @@ menu_hysteria() {
             3) delete_hysteria_user ;;
             4) list_hysteria_users ;;
             5) change_hysteria_mode ;;
-            6) systemctl restart hysteria; echo "  ${GREEN}✓ Hysteria restarted${NC}"; sleep 2 ;;
+            6) systemctl restart hysteria; echo -e "  ${GREEN}✓ Hysteria restarted${NC}"; sleep 2 ;;
             0) break ;;
             *) ;;
         esac
     done
 }
 
-# Function: Show Hysteria Config (CLEAN VERSION)
 show_hysteria_config() {
     show_header "› Hysteria › Configuration"
-    
     if [ -f /usr/local/afterlifevpn/hysteria-config.txt ]; then
         cat /usr/local/afterlifevpn/hysteria-config.txt
     else
         echo -e "  ${YELLOW}No configuration found${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Create Hysteria User
 create_hysteria_user() {
     show_header "› Hysteria › Create Account"
-    
+    local username days
     read -p "  Username: " username
+    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
     read -p "  Expiry (days): " days
     
-    # Check if user exists
     if grep -q "^$username|" /usr/local/afterlifevpn/users/hysteria_users.txt 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User already exists!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User already exists!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    # Create user
-    PASSWORD=$(bash /usr/local/afterlifevpn/setup/hysteria-user.sh add "$username" "$days")
+    local PASSWORD=$(bash /usr/local/afterlifevpn/setup/hysteria-user.sh add "$username" "$days")
     
-    # Get server info
     get_system_info
-    SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
-    EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
+    local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
+    local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
+    local LISTEN_PORTS=$(grep "listen:" /etc/hysteria/config.yaml 2>/dev/null | awk '{print $2}' | sed 's/://')
+    local STANDARD_PORT HOPPING_PORTS LINK_STANDARD LINK_HOPPING
     
-    # Display account info
+    if [[ "$LISTEN_PORTS" == *","* ]]; then
+        STANDARD_PORT=$(echo "$LISTEN_PORTS" | cut -d',' -f1)
+        HOPPING_PORTS="$LISTEN_PORTS"
+    else
+        STANDARD_PORT="$LISTEN_PORTS"
+        HOPPING_PORTS="N/A"
+    fi
+    
+    LINK_STANDARD="hy2://${username}:${PASSWORD}@${PUBLIC_IP}:${STANDARD_PORT}?insecure=1&sni=${SERVER_HOST}#${username}-Hy2"
+    if [[ "$HOPPING_PORTS" != "N/A" ]]; then
+        LINK_HOPPING="hy2://${username}:${PASSWORD}@${PUBLIC_IP}:${HOPPING_PORTS}?insecure=1&sni=${SERVER_HOST}#${username}-Hy2-Hop"
+    fi
+    
     clear
     echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                      ${WHITE}HYSTERIA 2 ACCOUNT CREATED${NC}                   ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}                      ${WHITE}HYSTERIA 2 ACCOUNT CREATED${NC}                    ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────────────────╯${NC}"
     echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
     echo -e " ${WHITE}Password${NC}     : ${GREEN}$PASSWORD${NC}"
     echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
     echo -e " ${WHITE}Server${NC}       : ${CYAN}$SERVER_HOST${NC}"
     echo -e " ${WHITE}Protocol${NC}     : ${CYAN}UDP (QUIC)${NC}"
-    echo -e " ${WHITE}Ports${NC}        : ${CYAN}$(grep "listen:" /etc/hysteria/config.yaml | awk '{print $2}' | sed 's/://')${NC}"
+    echo -e " ${WHITE}Active Ports${NC} : ${CYAN}$LISTEN_PORTS${NC}"
     echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ${WHITE}Connection${NC}   : ${YELLOW}hysteria2://$username:$PASSWORD@$PUBLIC_IP:443${NC}"
-    echo ""
-    echo -e " ${GREEN}✓ Hysteria 2 account created successfully!${NC}"
-    echo ""
+    echo -e " ⚡ ${WHITE}STANDARD LINK${NC}"
+    echo -e "   ${YELLOW}$LINK_STANDARD${NC}"
+    
+    if [[ "$HOPPING_PORTS" != "N/A" ]]; then
+        echo -e "   ${CYAN}══════════════════════════════${NC}"
+        echo -e " 🔀 ${WHITE}PORT-HOPPING LINK (harder to block)${NC}"
+        echo -e "   ${YELLOW}$LINK_HOPPING${NC}"
+    fi
+    
+    if command -v qrencode &> /dev/null; then
+        echo -e "\n ${WHITE}[QR CODE - Hysteria Standard Connection]${NC}"
+        qrencode -t ANSIUTF8 "$LINK_STANDARD"
+    fi
+    
+    echo -e "\n ${GREEN}✓ Hysteria 2 account created successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Delete Hysteria User
 delete_hysteria_user() {
     show_header "› Hysteria › Delete Account"
-    
+    local username
     read -p "  Username to delete: " username
+    if [[ -z "$username" ]]; then return; fi
     
     if ! grep -q "^$username|" /usr/local/afterlifevpn/users/hysteria_users.txt 2>/dev/null; then
-        echo ""
-        echo -e "  ${RED}✗ User does not exist!${NC}"
-        echo ""
+        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
-    # Delete user
     bash /usr/local/afterlifevpn/setup/hysteria-user.sh delete "$username"
-    
-    echo ""
-    echo -e "  ${GREEN}✓ User '$username' deleted successfully!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ User '$username' deleted successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: List Hysteria Users
 list_hysteria_users() {
     show_header "› Hysteria › User List"
-    
     if [ ! -f /usr/local/afterlifevpn/users/hysteria_users.txt ]; then
-        echo -e "  ${YELLOW}No users found${NC}"
-        echo ""
+        echo -e "  ${YELLOW}No users found${NC}\n"
         read -p "  Press enter to continue..."
         return
     fi
     
     echo -e "  ${WHITE}Username${NC}     ${WHITE}Password${NC}         ${WHITE}Created${NC}        ${WHITE}Expires${NC}"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────${NC}"
-    
     while IFS='|' read -r user pass expiry created; do
         printf "  %-12s %-16s %-14s %s\n" "$user" "$pass" "$created" "$expiry"
     done < /usr/local/afterlifevpn/users/hysteria_users.txt
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Change Hysteria Mode (CLEAN VERSION)
 change_hysteria_mode() {
     show_header "› Hysteria › Port Configuration"
-    
+    local mode_choice single_port port_range inc_53 listen_ports
     echo -e "  ${GREEN}1)${NC} Single Port Mode"
-    echo -e "  ${GREEN}2)${NC} Port Hopping Mode"
-    echo ""
+    echo -e "  ${GREEN}2)${NC} Port Hopping Mode\n"
     read -p "  Select mode: " mode_choice
     
     if [[ $mode_choice == "1" ]]; then
@@ -746,8 +699,8 @@ tls:
   key: /etc/afterlifevpn/cert/private.key
 
 auth:
-  type: password
-  password: $(grep "password:" /etc/hysteria/config.yaml 2>/dev/null | awk '{print $2}' || openssl rand -base64 16)
+  type: command
+  command: /etc/hysteria/auth.sh
 
 masquerade:
   type: proxy
@@ -761,21 +714,15 @@ quic:
   initConnReceiveWindow: 33554432
   maxConnReceiveWindow: 33554432
 EOF
-        
         systemctl restart hysteria
-        echo ""
-        echo -e "  ${GREEN}✓ Hysteria set to single port: $single_port${NC}"
+        echo -e "\n  ${GREEN}✓ Hysteria set to single port: $single_port${NC}"
         
     elif [[ $mode_choice == "2" ]]; then
-        
         read -p "  Enter port range (e.g., 20000-40000): " port_range
         read -p "  Include port 53? (y/n): " inc_53
         
-        if [[ $inc_53 == "y" ]]; then
-            listen_ports="53,$port_range"
-        else
-            listen_ports="$port_range"
-        fi
+        if [[ $inc_53 == "y" ]]; then listen_ports="53,$port_range"
+        else listen_ports="$port_range"; fi
         
         cat > /etc/hysteria/config.yaml <<EOF
 listen: :$listen_ports
@@ -785,8 +732,8 @@ tls:
   key: /etc/afterlifevpn/cert/private.key
 
 auth:
-  type: password
-  password: $(grep "password:" /etc/hysteria/config.yaml 2>/dev/null | awk '{print $2}' || openssl rand -base64 16)
+  type: command
+  command: /etc/hysteria/auth.sh
 
 masquerade:
   type: proxy
@@ -800,50 +747,29 @@ quic:
   initConnReceiveWindow: 33554432
   maxConnReceiveWindow: 33554432
 EOF
-        
         systemctl restart hysteria
-        echo ""
-        echo -e "  ${GREEN}✓ Hysteria set to port hopping: $listen_ports${NC}"
+        echo -e "\n  ${GREEN}✓ Hysteria set to port hopping: $listen_ports${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Placeholder menus
-menu_wireguard() {
-    show_header "› WireGuard › Management"
-    echo -e "  ${YELLOW}WireGuard VPN - Coming Soon!${NC}"
-    echo ""
-    read -p "  Press enter to continue..."
-}
-
-menu_l2tp() {
-    show_header "› L2TP › Management"
-    echo -e "  ${YELLOW}L2TP/IPsec VPN - Coming Soon!${NC}"
-    echo ""
-    read -p "  Press enter to continue..."
-}
-
-menu_subscriptions() {
-    show_header "› Subscriptions › Management"
-    echo -e "  ${YELLOW}Subscription Management - Coming Soon!${NC}"
-    echo ""
-    read -p "  Press enter to continue..."
-}
+# ============================================================================
+# SYSTEM SETTINGS & UTILS
+# ============================================================================
+menu_wireguard() { show_header "› WireGuard"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
+menu_l2tp() { show_header "› L2TP / IPsec"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
+menu_subscriptions() { show_header "› Subscriptions"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
 
 menu_bbr() {
     show_header "› System › TCP BBR Status"
-    
     local bbr_status=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
-    
     if [[ $bbr_status == "bbr" ]]; then
         echo -e "  ${GREEN}✓ TCP BBR is ENABLED${NC}"
     else
         echo -e "  ${RED}✗ TCP BBR is DISABLED${NC}"
         echo -e "  ${YELLOW}Current algorithm: $bbr_status${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
@@ -856,8 +782,7 @@ menu_settings() {
         echo -e "  ${GREEN}3)${NC} Restart All Services"
         echo -e "  ${GREEN}4)${NC} Check Service Status"
         echo -e "  ${GREEN}5)${NC} Bandwidth Limiter"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu"
-        echo ""
+        echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " settings_option
         
         case $settings_option in
@@ -872,7 +797,6 @@ menu_settings() {
     done
 }
 
-# Function: Clear Logs
 clear_logs() {
     show_header "› Settings › Clear Logs"
     echo -e "  ${YELLOW}Clearing system logs...${NC}"
@@ -880,22 +804,14 @@ clear_logs() {
     journalctl --vacuum-size=50M
     echo "" > /var/log/syslog 2>/dev/null
     echo "" > /var/log/auth.log 2>/dev/null
-    echo ""
-    echo -e "  ${GREEN}✓ Logs cleared!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ Logs cleared!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: View Logs
 view_logs() {
     show_header "› Settings › Service Logs"
-    echo -e "  ${GREEN}1)${NC} SSH WebSocket"
-    echo -e "  ${GREEN}2)${NC} Xray (VMess)"
-    echo -e "  ${GREEN}3)${NC} Hysteria 2"
-    echo -e "  ${GREEN}4)${NC} Dropbear"
-    echo ""
+    echo -e "  ${GREEN}1)${NC} SSH WebSocket\n  ${GREEN}2)${NC} Xray (VMess)\n  ${GREEN}3)${NC} Hysteria 2\n  ${GREEN}4)${NC} Dropbear\n"
     read -p "  Select service: " log_choice
-    
     clear
     case $log_choice in
         1) journalctl -u ws-ssh -n 50 --no-pager ;;
@@ -903,48 +819,35 @@ view_logs() {
         3) journalctl -u hysteria -n 50 --no-pager ;;
         4) journalctl -u dropbear -n 50 --no-pager ;;
     esac
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Restart All Services
 restart_all_services() {
     show_header "› Settings › Restart Services"
     echo -e "  ${YELLOW}Restarting all services...${NC}"
     systemctl restart ws-ssh xray hysteria udp-custom dropbear
-    echo ""
-    echo -e "  ${GREEN}✓ All services restarted!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ All services restarted!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Check All Services
 check_all_services() {
     show_header "› Settings › Service Status"
-    
-    services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
-    names=("SSH WebSocket" "Xray (VMess)" "Hysteria 2" "UDP Custom" "Dropbear")
+    local services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
+    local names=("SSH WebSocket" "Xray (VMess)" "Hysteria 2" "UDP Custom" "Dropbear")
     
     for i in "${!services[@]}"; do
-        if systemctl is-active --quiet ${services[$i]}; then
+        if systemctl is-active --quiet "${services[$i]}"; then
             echo -e "  ${GREEN}●${NC} ${names[$i]}: ${GREEN}Running${NC}"
         else
             echo -e "  ${RED}○${NC} ${names[$i]}: ${RED}Stopped${NC}"
         fi
     done
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Bandwidth Limiter
-bandwidth_limiter() {
-    show_header "› Settings › Bandwidth Limiter"
-    echo -e "  ${YELLOW}Feature coming soon...${NC}"
-    echo ""
-    read -p "  Press enter to continue..."
-}
+bandwidth_limiter() { show_header "› Bandwidth"; echo -e "  ${YELLOW}Coming soon...${NC}\n"; read -p "  Press enter..."; }
 
 menu_backup() {
     while true; do
@@ -953,8 +856,7 @@ menu_backup() {
         echo -e "  ${GREEN}2)${NC} Restore Configuration"
         echo -e "  ${GREEN}3)${NC} List Backups"
         echo -e "  ${GREEN}4)${NC} Telegram Bot (Coming Soon)"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu"
-        echo ""
+        echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " backup_option
         
         case $backup_option in
@@ -968,52 +870,40 @@ menu_backup() {
     done
 }
 
-# Function: Create Backup
 create_backup() {
     show_header "› Backup › Create"
     echo -e "  ${YELLOW}Creating backup...${NC}"
     
-    BACKUP_DIR="/root/afterlifevpn-backup"
-    BACKUP_FILE="afterlifevpn-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    mkdir -p $BACKUP_DIR
-    TEMP_BACKUP="/tmp/afterlifevpn-backup-temp"
-    mkdir -p $TEMP_BACKUP
+    local BACKUP_DIR="/root/afterlifevpn-backup"
+    local BACKUP_FILE="afterlifevpn-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+    mkdir -p "$BACKUP_DIR"
+    local TEMP_BACKUP="/tmp/afterlifevpn-backup-temp"
+    mkdir -p "$TEMP_BACKUP"
     
-    cp -r /usr/local/afterlifevpn $TEMP_BACKUP/ 2>/dev/null
-    cp -r /etc/afterlifevpn $TEMP_BACKUP/ 2>/dev/null
-    cp -r /etc/hysteria $TEMP_BACKUP/ 2>/dev/null
-    cp /usr/local/etc/xray/config.json $TEMP_BACKUP/ 2>/dev/null
+    cp -r /usr/local/afterlifevpn "$TEMP_BACKUP/" 2>/dev/null
+    cp -r /etc/afterlifevpn "$TEMP_BACKUP/" 2>/dev/null
+    cp -r /etc/hysteria "$TEMP_BACKUP/" 2>/dev/null
+    cp /usr/local/etc/xray/config.json "$TEMP_BACKUP/" 2>/dev/null
     
     cd /tmp
-    tar -czf $BACKUP_DIR/$BACKUP_FILE afterlifevpn-backup-temp/
-    rm -rf $TEMP_BACKUP
+    tar -czf "$BACKUP_DIR/$BACKUP_FILE" afterlifevpn-backup-temp/
+    rm -rf "$TEMP_BACKUP"
     
-    echo ""
-    echo -e "  ${GREEN}✓ Backup completed!${NC}"
+    echo -e "\n  ${GREEN}✓ Backup completed!${NC}"
     echo -e "  ${WHITE}Saved to:${NC} $BACKUP_DIR/$BACKUP_FILE"
-    echo -e "  ${WHITE}Size:${NC} $(du -h $BACKUP_DIR/$BACKUP_FILE | awk '{print $1}')"
-    echo ""
+    echo -e "  ${WHITE}Size:${NC} $(du -h $BACKUP_DIR/$BACKUP_FILE | awk '{print $1}')\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: Restore Backup
-restore_backup() {
-    show_header "› Backup › Restore"
-    echo -e "  ${YELLOW}Feature coming soon...${NC}"
-    echo ""
-    read -p "  Press enter to continue..."
-}
+restore_backup() { show_header "› Restore"; echo -e "  ${YELLOW}Coming soon...${NC}\n"; read -p "  Press enter..."; }
 
-# Function: List Backups
 list_backups() {
     show_header "› Backup › List"
-    
     if [ -d /root/afterlifevpn-backup ] && [ "$(ls -A /root/afterlifevpn-backup 2>/dev/null)" ]; then
         ls -lh /root/afterlifevpn-backup/*.tar.gz 2>/dev/null | awk '{print "  "$9" ("$5")"}'
     else
         echo -e "  ${YELLOW}No backups found${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
@@ -1024,8 +914,7 @@ menu_domain() {
         echo -e "  ${GREEN}1)${NC} Renew SSL Certificate"
         echo -e "  ${GREEN}2)${NC} Change Domain"
         echo -e "  ${GREEN}3)${NC} View Certificate Info"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu"
-        echo ""
+        echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " domain_option
         
         case $domain_option in
@@ -1038,59 +927,46 @@ menu_domain() {
     done
 }
 
-# Function: Renew Certificate
 renew_certificate() {
     show_header "› Domain › Renew Certificate"
     echo -e "  ${YELLOW}Renewing SSL certificate...${NC}"
     source /usr/local/afterlifevpn/config.conf
     ~/.acme.sh/acme.sh --renew -d "$DOMAIN" --force
     systemctl restart ws-ssh xray hysteria
-    echo ""
-    echo -e "  ${GREEN}✓ Certificate renewed!${NC}"
-    echo ""
+    echo -e "\n  ${GREEN}✓ Certificate renewed!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
-# Function: View Certificate
 view_certificate() {
     show_header "› Domain › Certificate Info"
-    
     if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then
         openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"
     else
         echo -e "  ${RED}No certificate found${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Update Script
 update_script() {
     show_header "› System › Update"
     echo -e "  ${YELLOW}Checking for updates...${NC}"
     
-   wget -q -O /tmp/menu.sh "https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/menu/menu.sh"
-    
+    wget -q -O /tmp/menu.sh "https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/menu/menu.sh"
     if [ $? -eq 0 ]; then
         cp /tmp/menu.sh /usr/local/afterlifevpn/menu/menu.sh
         chmod +x /usr/local/afterlifevpn/menu/menu.sh
-        echo ""
-        echo -e "  ${GREEN}✓ Menu updated successfully!${NC}"
+        echo -e "\n  ${GREEN}✓ Menu updated successfully!${NC}"
         echo -e "  ${YELLOW}⚠ Restart menu to apply changes${NC}"
     else
-        echo ""
-        echo -e "  ${RED}✗ Update failed!${NC}"
+        echo -e "\n  ${RED}✗ Update failed!${NC}"
     fi
-    
     echo ""
     read -p "  Press enter to continue..."
 }
 
-# Function: Full Diagnostics
 full_diagnostics() {
     show_header "› System › Full Diagnostics"
-    
     get_system_info
     
     echo -e "  ${WHITE}[System Information]${NC}"
@@ -1098,19 +974,17 @@ full_diagnostics() {
     echo -e "  Public IP: $PUBLIC_IP"
     echo -e "  OS: $OS_VERSION"
     echo -e "  Kernel: $(uname -r)"
-    echo -e "  Uptime: $UPTIME"
-    echo ""
+    echo -e "  Uptime: $UPTIME\n"
     
     echo -e "  ${WHITE}[Resource Usage]${NC}"
     echo -e "  CPU: ${CPU_USAGE}% (${CPU_CORES} cores)"
     echo -e "  RAM: ${USED_RAM}MB / ${TOTAL_RAM}MB (${RAM_PERCENT}%)"
-    echo -e "  Disk: ${USED_DISK} / ${TOTAL_DISK} (${DISK_PERCENT}%)"
-    echo ""
+    echo -e "  Disk: ${USED_DISK} / ${TOTAL_DISK} (${DISK_PERCENT}%)\n"
     
     echo -e "  ${WHITE}[Services]${NC}"
-    services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
+    local services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
     for service in "${services[@]}"; do
-        if systemctl is-active --quiet $service; then
+        if systemctl is-active --quiet "$service"; then
             echo -e "  ${GREEN}●${NC} $service: Running"
         else
             echo -e "  ${RED}○${NC} $service: Stopped"
@@ -1120,8 +994,7 @@ full_diagnostics() {
     
     echo -e "  ${WHITE}[Users]${NC}"
     echo -e "  Total registered: $(count_users)"
-    echo -e "  Currently online: $(who | wc -l)"
-    echo ""
+    echo -e "  Currently online: $(who | wc -l)\n"
     
     read -p "  Press enter to continue..."
 }
