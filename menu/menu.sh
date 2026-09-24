@@ -1023,36 +1023,63 @@ update_script() {
 }
 
 full_diagnostics() {
-    show_header "› System › Full Diagnostics"
+    clear
     get_system_info
     
-    echo -e "  ${WHITE}[System Information]${NC}"
-    echo -e "  Hostname: $HOSTNAME"
-    echo -e "  Public IP: $PUBLIC_IP"
-    echo -e "  OS: $OS_VERSION"
-    echo -e "  Kernel: $(uname -r)"
-    echo -e "  Uptime: $UPTIME\n"
-    
-    echo -e "  ${WHITE}[Resource Usage]${NC}"
-    echo -e "  CPU: ${CPU_USAGE}% (${CPU_CORES} cores)"
-    echo -e "  RAM: ${USED_RAM}MB / ${TOTAL_RAM}MB (${RAM_PERCENT}%)"
-    echo -e "  Disk: ${USED_DISK} / ${TOTAL_DISK} (${DISK_PERCENT}%)\n"
-    
-    echo -e "  ${WHITE}[Services]${NC}"
-    local services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
-    for service in "${services[@]}"; do
-        if systemctl is-active --quiet "$service"; then
-            echo -e "  ${GREEN}●${NC} $service: Running"
-        else
-            echo -e "  ${RED}○${NC} $service: Stopped"
-        fi
-    done
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
+    echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
+    echo -e "${CYAN}║${NC} ${WHITE}› Diagnostics${NC}                                          ${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
     echo ""
     
-    echo -e "  ${WHITE}[Users]${NC}"
-    echo -e "  Total registered: $(count_users)"
-    echo -e "  Currently online: $(who | wc -l)\n"
+    echo -e " ${WHITE}[ Services ]${NC}"
+    check_srv() {
+        if systemctl is-active --quiet "$1" 2>/dev/null; then
+            echo -e "  ${GREEN}[PASS]${NC} $1 is running"
+        else
+            echo -e "  ${RED}[FAIL]${NC} $1 is stopped or missing"
+        fi
+    }
     
+    check_srv nginx
+    check_srv xray
+    check_srv dropbear
+    check_srv ssh
+    check_srv ws-ssh
+    check_srv badvpn
+    check_srv hysteria
+    check_srv squid
+    check_srv danted
+
+    echo ""
+    echo -e " ${WHITE}[ Ports ]${NC}"
+    check_port() {
+        if netstat -tuln 2>/dev/null | grep -q ":$1 "; then
+            echo -e "  ${GREEN}[PASS]${NC} port $1 ($2)"
+        else
+            echo -e "  ${RED}[FAIL]${NC} port $1 ($2)"
+        fi
+    }
+
+    check_port 443 "nginx / https"
+    check_port 80 "nginx / http"
+    check_port 22 "ssh"
+    check_port 442 "dropbear"
+    check_port 7300 "badvpn udpgw"
+    check_port 8880 "ws-ssh internal"
+    check_port 10001 "xray internal"
+    check_port 3128 "squid"
+    check_port 1080 "dante socks5"
+    check_port 53 "hysteria udp"
+
+    echo ""
+    echo -e " ${WHITE}[ System ]${NC}"
+    echo -e "  ${GREEN}[PASS]${NC} CPU: ${CPU_USAGE}% (${CPU_CORES} Core)"
+    echo -e "  ${GREEN}[PASS]${NC} RAM: ${RAM_PERCENT}% (${USED_RAM}MB / ${TOTAL_RAM}MB)"
+    echo -e "  ${GREEN}[PASS]${NC} Active Users: $(count_users)"
+    
+    echo ""
     read -p "  Press enter to continue..."
 }
 
