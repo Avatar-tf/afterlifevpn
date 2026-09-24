@@ -2,13 +2,19 @@
 
 DOMAIN=$1
 
-# Install Xray
+echo -e "\e[1;33mInstalling Xray (VMess Multi-User Ready)...\e[0m"
+
+# Install required JSON parser and UUID tools for the menu system
+apt-get update
+apt-get install -y jq uuid-runtime
+
+# Install Xray Core
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
-# Generate UUID
-UUID=$(cat /proc/sys/kernel/random/uuid)
+# Create necessary directories for the menu database
+mkdir -p /usr/local/afterlifevpn/users
 
-# Create Xray config
+# Create Xray config (Multi-User Foundation)
 cat > /usr/local/etc/xray/config.json <<EOF
 {
   "inbounds": [
@@ -16,12 +22,7 @@ cat > /usr/local/etc/xray/config.json <<EOF
       "port": 443,
       "protocol": "vmess",
       "settings": {
-        "clients": [
-          {
-            "id": "$UUID",
-            "alterId": 0
-          }
-        ]
+        "clients": []
       },
       "streamSettings": {
         "network": "ws",
@@ -48,19 +49,18 @@ cat > /usr/local/etc/xray/config.json <<EOF
 }
 EOF
 
-# Save VMess config
+# Save base config info for the menu
 cat > /usr/local/afterlifevpn/vmess-config.txt <<EOF
-VMess Configuration:
+VMess Core Configuration:
 Address: $DOMAIN
 Port: 443
-UUID: $UUID
-AlterID: 0
-Network: ws
+Network: WebSocket (ws)
 Path: /vmess
-TLS: enabled
+TLS: Enabled
+Authentication: Multi-User (JSON Dynamic)
 EOF
 
 systemctl restart xray
 systemctl enable xray
 
-echo "VMess installed with UUID: $UUID"
+echo -e "\e[0;32m✓ Xray installed successfully. Base configuration ready for user injection.\e[0m"
