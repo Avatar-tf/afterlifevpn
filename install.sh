@@ -75,8 +75,8 @@ mkdir -p /usr/local/afterlifevpn/setup
 mkdir -p /usr/local/afterlifevpn/menu
 mkdir -p /usr/local/afterlifevpn/users
 
-# Base URL - UPDATE THIS with your GitLab username/repo
-BASE_URL="https://gitlab.com/Avatar-tf/afterlifevpn/-/raw/main"
+# Base URL for GitHub
+BASE_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
 
 # Download all setup scripts
 wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh "$BASE_URL/setup/ssh-ws.sh"
