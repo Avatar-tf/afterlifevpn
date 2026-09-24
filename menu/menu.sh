@@ -179,13 +179,15 @@ menu_ssh() {
 create_ssh_user() {
     show_header "› SSH › Create Account"
     
-    local username password days max_login
+    local username password days devices quota
     read -p "  Username: " username
-    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter to continue..."; return; fi
+    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
     read -p "  Password: " password
     read -p "  Expiry (days): " days
-    read -p "  Max Login (devices): " max_login
-    max_login=${max_login:-2}
+    read -p "  Max Login (devices) [default 2]: " devices
+    devices=${devices:-2}
+    read -p "  Data Quota [default Unlimited]: " quota
+    quota=${quota:-Unlimited}
     
     if id "$username" &>/dev/null; then
         echo -e "\n  ${RED}✗ User already exists!${NC}\n"
@@ -201,39 +203,47 @@ create_ssh_user() {
     fi
     
     mkdir -p /usr/local/afterlifevpn/users
-    echo "$username|$password|$(date -d "+$days days" +%Y-%m-%d)|$(date +%Y-%m-%d)|$max_login" >> /usr/local/afterlifevpn/users/ssh_users.txt
+    echo "$username|$password|$(date -d "+$days days" +%Y-%m-%d)|$(date +%Y-%m-%d)|$devices|$quota" >> /usr/local/afterlifevpn/users/ssh_users.txt
     
     get_system_info
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
-    local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
+    local EXPIRY_DATE=$(date -d "+$days days" +"%Y-%m-%d")
     local WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
     local DROPBEAR_PORT=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
-    local PUBKEY=$(echo -n "$username$password" | sha256sum | awk '{print $1}')
     
     clear
-    echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                        ${WHITE}PREMIUM SSH WS ACCOUNT${NC}                      ${CYAN}│${NC}"
-    echo -e "${CYAN}╰────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
-    echo -e " ${WHITE}Password${NC}     : ${GREEN}$password${NC}"
-    echo -e " ${WHITE}Max Login${NC}    : ${YELLOW}$max_login Device(s)${NC}"
-    echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
-    echo -e " ${WHITE}Host${NC}         : ${CYAN}$SERVER_HOST${NC}"
-    echo -e " ${WHITE}PubKey${NC}       : ${PURPLE}$PUBKEY${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ${WHITE}► HTTP & SOCKS PROXY:${NC}"
-    echo -e " ${WHITE}HTTP Proxy${NC}   : ${CYAN}$SERVER_HOST:3128${NC} ${YELLOW}(Auth: $username:$password)${NC}"
-    echo -e " ${WHITE}SOCKS5 Proxy${NC} : ${CYAN}$SERVER_HOST:1080:$username:$password${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ${WHITE}► DIRECT CONNECTIONS:${NC}"
-    echo -e " ${WHITE}TLS Ports${NC}    : ${GREEN}443, 2053, 2083, 2087, 2096, 8443${NC}"
-    echo -e " ${WHITE}SSH Default${NC}  : ${CYAN}$SERVER_HOST:22@$username:$password${NC}"
-    echo -e " ${WHITE}Dropbear${NC}     : ${CYAN}$SERVER_HOST:$DROPBEAR_PORT@$username:$password${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ${WHITE}► WEBSOCKET PATHS:${NC}"
-    echo -e " ${WHITE}OpenSSH Path${NC} : ${GREEN}/ssh${NC} ${YELLOW}(Port $WS_PORT)${NC}"
-    echo -e " ${WHITE}Dropbear Path${NC}: ${GREEN}/dropbear${NC} ${YELLOW}(Port $WS_PORT)${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "         🔐 ${WHITE}AFTERLIFE PREMIUM — SSH ACCOUNT${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e " 👤 ${WHITE}ACCOUNT${NC}"
+    echo -e "   Username    : ${GREEN}$username${NC}"
+    echo -e "   Password    : ${GREEN}$password${NC}"
+    echo -e "   Expires     : ${RED}$EXPIRY_DATE${NC}"
+    echo -e "   Devices     : ${YELLOW}$devices${NC}"
+    echo -e "   Data Quota  : ${YELLOW}$quota${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e " 🌐 ${WHITE}SERVER${NC}"
+    echo -e "   Host        : ${GREEN}$SERVER_HOST${NC}"
+    echo -e "   WS Ports    : ${YELLOW}80 / $WS_PORT${NC}"
+    echo -e "   SSL Ports   : ${YELLOW}443 / 777${NC}"
+    echo -e "   UDP-Custom  : ${YELLOW}port 53 or 36712 (same login)${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e " 📡 ${WHITE}HTTP CUSTOM PAYLOADS${NC}"
+    echo -e "   ① Port 80 — WebSocket"
+    echo -e "   ${YELLOW}GET / HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e "   ② Port 443 — WebSocket TLS (WSS)"
+    echo -e "   ${YELLOW}GET wss://$SERVER_HOST/ HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e "   ③ CONNECT (proxy / injector)"
+    echo -e "   ${YELLOW}CONNECT $SERVER_HOST:80 HTTP/1.1[crlf]Host: $SERVER_HOST[crlf][crlf]${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e "   ④ Front-Inject — replace [bug] with your bug host"
+    echo -e "   ${YELLOW}GET http://[bug]/ HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+    echo -e "   ${CYAN}══════════════════════════════${NC}"
+    echo -e "   ⑤ Header-Spoof (X-Online-Host)"
+    echo -e "   ${YELLOW}GET / HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]X-Online-Host: $SERVER_HOST[crlf]X-Forward-Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     
     local CONNECTION_STRING="ssh://$username:$password@$SERVER_HOST:22"
     if command -v qrencode &> /dev/null; then
@@ -241,7 +251,7 @@ create_ssh_user() {
         qrencode -t ANSIUTF8 "$CONNECTION_STRING"
     fi
     
-    echo -e "\n ${GREEN}✓ Account created successfully!${NC}\n"
+    echo -e "\n  ${GREEN}✓ Account created successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
