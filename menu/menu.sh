@@ -1070,7 +1070,7 @@ update_script() {
     show_header "› System › Update"
     echo -e "  ${YELLOW}Checking for updates...${NC}"
     
-    wget -q -O /tmp/menu.sh "https://gitlab.com/Avatar-tf/afterlifevpn/-/raw/main/menu/menu.sh"
+   wget -q -O /tmp/menu.sh "https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/menu/menu.sh"
     
     if [ $? -eq 0 ]; then
         cp /tmp/menu.sh /usr/local/afterlifevpn/menu/menu.sh
