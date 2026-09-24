@@ -37,16 +37,26 @@ get_system_info() {
     read TOTAL_DISK USED_DISK DISK_PERCENT <<< $(df -h / | awk 'NR==2{print $2, $3, $5}' | tr -d '%')
 }
 
-# Create progress bar
+# Create progress bar (Fixed for UTF-8 Multi-byte Characters)
 create_bar() {
     local percent=$1
     local width=12
     local filled=$((percent * width / 100))
     local empty=$((width - filled))
-    printf "["
-    printf "%${filled}s" | tr ' ' '█'
-    printf "%${empty}s" | tr ' ' '░'
-    printf "]"
+    
+    # Create empty variables for the bar sections
+    local fill_bar=""
+    local empty_bar=""
+    
+    # Generate spaces matching the required lengths
+    if [[ $filled -gt 0 ]]; then printf -v fill_bar "%${filled}s" ""; fi
+    if [[ $empty -gt 0 ]]; then printf -v empty_bar "%${empty}s" ""; fi
+    
+    # Safely replace spaces with multi-byte Unicode blocks natively in Bash
+    fill_bar=${fill_bar// /█}
+    empty_bar=${empty_bar// /░}
+    
+    printf "[%s%s]" "$fill_bar" "$empty_bar"
 }
 
 # Check service status (Quoted variables)
