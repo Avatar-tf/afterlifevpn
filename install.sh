@@ -1,187 +1,143 @@
 #!/bin/bash
 
-# Colors for better UI
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ==========================================================
+# AFTERLIFE VPN - MASTER INSTALLATION SCRIPT
+# ==========================================================
 
-# Clear screen
-clear
+if [[ $EUID -ne 0 ]]; then
+   echo -e "\033[0;31mError: This script must be run as root.\033[0m"
+   exit 1
+fi
 
-# Banner
-echo -e "${BLUE}================================${NC}"
-echo -e "${GREEN}  AFTERLIFE VPN Auto Installer${NC}"
-echo -e "${BLUE}================================${NC}"
-echo ""
+DOMAIN=$1
+if [[ -z "$DOMAIN" ]]; then
+    read -p "Enter your domain (e.g., tech.itzdajohn.online): " DOMAIN
+fi
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${RED}Please run as root (use: sudo su)${NC}"
+if [[ -z "$DOMAIN" ]]; then
+    echo "Domain is required for SSL generation. Exiting."
     exit 1
 fi
 
-# Check OS
-if [[ $(cat /etc/os-release | grep -w ID | head -n1 | sed 's/=/ /g' | awk '{print $2}') != "ubuntu" ]]; then
-    echo -e "${RED}This script only supports Ubuntu${NC}"
-    echo -e "${YELLOW}Recommended: Ubuntu 20.04 LTS or Ubuntu 22.04 LTS${NC}"
-    exit 1
-fi
+echo -e "\e[1;33m[1/6] Updating System & Installing Dependencies...\e[0m"
+apt-get update -y && apt-get upgrade -y
+apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3-websockets nginx socat cron
 
-# Check Ubuntu version
-UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "unknown")
-echo -e "Detected: ${GREEN}Ubuntu $UBUNTU_VERSION${NC}"
-echo ""
+# Create Directory Structure
+mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
+mkdir -p /etc/afterlifevpn/cert
+echo "DOMAIN=$DOMAIN" > /usr/local/afterlifevpn/config.conf
+echo "8880" > /usr/local/afterlifevpn/ws-port.conf
 
-# Get user input
-echo -e "${YELLOW}Please provide the following information:${NC}"
-echo ""
-read -p "Enter your domain (e.g., vpn.example.com): " domain
-read -p "Enter your email for SSL certificate: " email
-echo ""
+echo -e "\e[1;33m[2/6] Generating SSL Certificates...\e[0m"
+curl https://get.acme.sh | sh
+~/.acme.sh/acme.sh --register-account -m admin@$DOMAIN
+~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone
+~/.acme.sh/acme.sh --installcert -d $DOMAIN \
+    --fullchainpath /etc/afterlifevpn/cert/fullchain.crt \
+    --keypath /etc/afterlifevpn/cert/private.key
+chmod 644 /etc/afterlifevpn/cert/*
 
-# Port configuration
-echo -e "${YELLOW}Port Configuration:${NC}"
-read -p "SSH WebSocket port (default 443): " ws_port
-ws_port=${ws_port:-443}
+echo -e "\e[1;33m[3/6] Configuring Nginx Reverse Proxy...\e[0m"
+cat > /etc/nginx/sites-available/afterlifevpn <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
 
-read -p "Enable Hysteria 2 port hopping? (y/n, default y): " enable_hopping
-enable_hopping=${enable_hopping:-y}
+    location / {
+        proxy_pass http://127.0.0.1:8880;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+}
 
-if [[ $enable_hopping == "y" ]]; then
-    read -p "Hysteria 2 port range (default 20000-40000): " hysteria_ports
-    hysteria_ports=${hysteria_ports:-20000-40000}
-    read -p "Include port 53 for Hysteria? (y/n, default y): " include_53
-    include_53=${include_53:-y}
-else
-    read -p "Hysteria 2 single port (default 443): " hysteria_port
-    hysteria_port=${hysteria_port:-443}
-fi
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name _;
 
-echo ""
+    ssl_certificate /etc/afterlifevpn/cert/fullchain.crt;
+    ssl_certificate_key /etc/afterlifevpn/cert/private.key;
 
-# Update system
-echo -e "${GREEN}[1/13] Updating system...${NC}"
-apt update && apt upgrade -y
+    location /vmess {
+        if (\$http_upgrade != "websocket") {
+            return 404;
+        }
+        proxy_pass http://127.0.0.1:10001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
 
-# Install basic dependencies
-echo -e "${GREEN}[2/13] Installing dependencies...${NC}"
-apt install -y wget curl git nano socat jq lsb-release iptables-persistent python3 python3-pip apache2-utils qrencode
+    location / {
+        proxy_pass http://127.0.0.1:8880;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+}
+EOF
+ln -sf /etc/nginx/sites-available/afterlifevpn /etc/nginx/sites-enabled/
+rm /etc/nginx/sites-enabled/default 2>/dev/null
+systemctl restart nginx
+systemctl enable nginx
 
-# Download setup scripts
-echo -e "${GREEN}[3/13] Downloading setup modules...${NC}"
-mkdir -p /usr/local/afterlifevpn/setup
-mkdir -p /usr/local/afterlifevpn/menu
-mkdir -p /usr/local/afterlifevpn/users
+echo -e "\e[1;33m[4/6] Installing Back-Room Protocols...\e[0m"
+# Xray (VMess on internal port 10001)
+bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+cat > /usr/local/etc/xray/config.json <<EOF
+{
+  "inbounds": [
+    {
+      "port": 10001,
+      "listen": "127.0.0.1",
+      "protocol": "vmess",
+      "settings": {
+        "clients": []
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/vmess"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom"
+    }
+  ]
+}
+EOF
+systemctl restart xray
+systemctl enable xray
 
-# Base URL for GitHub
-BASE_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+echo -e "\e[1;33m[5/6] Pulling Scripts from GitHub...\e[0m"
+REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
 
-# Download all setup scripts
-wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh "$BASE_URL/setup/ssh-ws.sh"
-wget -q -O /usr/local/afterlifevpn/setup/vmess.sh "$BASE_URL/setup/vmess.sh"
-wget -q -O /usr/local/afterlifevpn/setup/hysteria.sh "$BASE_URL/setup/hysteria.sh"
-wget -q -O /usr/local/afterlifevpn/setup/udp.sh "$BASE_URL/setup/udp.sh"
-wget -q -O /usr/local/afterlifevpn/setup/ssl.sh "$BASE_URL/setup/ssl.sh"
-wget -q -O /usr/local/afterlifevpn/setup/bbr.sh "$BASE_URL/setup/bbr.sh"
-wget -q -O /usr/local/afterlifevpn/setup/dropbear.sh "$BASE_URL/setup/dropbear.sh"
-wget -q -O /usr/local/afterlifevpn/setup/squid.sh "$BASE_URL/setup/squid.sh"
-wget -q -O /usr/local/afterlifevpn/setup/dante.sh "$BASE_URL/setup/dante.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh "$BASE_URL/setup/xray-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$BASE_URL/setup/hysteria-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/backup.sh "$BASE_URL/setup/backup.sh"
-wget -q -O /usr/local/afterlifevpn/setup/restore.sh "$BASE_URL/setup/restore.sh"
-wget -q -O /usr/local/afterlifevpn/setup/clear-log.sh "$BASE_URL/setup/clear-log.sh"
-wget -q -O /usr/local/afterlifevpn/setup/running.sh "$BASE_URL/setup/running.sh"
-wget -q -O /usr/local/afterlifevpn/setup/limit-speed.sh "$BASE_URL/setup/limit-speed.sh"
-wget -q -O /usr/local/afterlifevpn/menu/menu.sh "$BASE_URL/menu/menu.sh"
+# Download Menu and setup scripts
+wget -q -O /usr/local/afterlifevpn/menu/menu.sh "$REPO/menu/menu.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh "$REPO/setup/xray-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/squid.sh "$REPO/setup/squid.sh"
+wget -q -O /usr/local/afterlifevpn/setup/dante.sh "$REPO/setup/dante.sh"
 
-# Make scripts executable
+chmod +x /usr/local/afterlifevpn/menu/menu.sh
 chmod +x /usr/local/afterlifevpn/setup/*.sh
-chmod +x /usr/local/afterlifevpn/menu/*.sh
 
-# Run setup scripts
-echo -e "${GREEN}[4/13] Setting up TCP BBR...${NC}"
-bash /usr/local/afterlifevpn/setup/bbr.sh
-
-echo -e "${GREEN}[5/13] Setting up SSL certificates...${NC}"
-bash /usr/local/afterlifevpn/setup/ssl.sh "$domain" "$email"
-
-echo -e "${GREEN}[6/13] Setting up SSH WebSocket...${NC}"
-bash /usr/local/afterlifevpn/setup/ssh-ws.sh "$domain" "$ws_port"
-
-echo -e "${GREEN}[7/13] Setting up Dropbear...${NC}"
-bash /usr/local/afterlifevpn/setup/dropbear.sh
-
-echo -e "${GREEN}[8/13] Setting up VMess (Xray)...${NC}"
-bash /usr/local/afterlifevpn/setup/vmess.sh "$domain"
-
-echo -e "${GREEN}[9/13] Setting up Hysteria 2...${NC}"
-if [[ $enable_hopping == "y" ]]; then
-    bash /usr/local/afterlifevpn/setup/hysteria.sh "$domain" "hopping" "$hysteria_ports" "$include_53"
-else
-    bash /usr/local/afterlifevpn/setup/hysteria.sh "$domain" "single" "$hysteria_port"
-fi
-
-echo -e "${GREEN}[10/13] Setting up UDP Custom...${NC}"
-bash /usr/local/afterlifevpn/setup/udp.sh
-
-echo -e "${GREEN}[11/13] Setting up HTTP Proxy (Squid)...${NC}"
+# Run Proxy Setup Scripts
 bash /usr/local/afterlifevpn/setup/squid.sh
-
-echo -e "${GREEN}[12/13] Setting up SOCKS5 Proxy (Dante)...${NC}"
 bash /usr/local/afterlifevpn/setup/dante.sh
 
-echo -e "${GREEN}[13/13] Finalizing installation...${NC}"
-
-# Create menu command
+echo -e "\e[1;33m[6/6] Finalizing Setup...\e[0m"
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
+ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
 
-# Save configuration
-cat > /usr/local/afterlifevpn/config.conf <<EOF
-DOMAIN=$domain
-EMAIL=$email
-WS_PORT=$ws_port
-HYSTERIA_MODE=$enable_hopping
-HYSTERIA_PORTS=$hysteria_ports
-HYSTERIA_PORT=$hysteria_port
-INCLUDE_53=$include_53
-INSTALL_DATE=$(date)
-VERSION=1.0.0
-EOF
-
-# Create default SSH banner
-cat > /etc/issue.net <<EOF
-════════════════════════════════════════
-        AFTERLIFE VPN Server
-════════════════════════════════════════
- No DDOS | No Torrent | No Mining
- No Hacking | No Spam
-════════════════════════════════════════
-EOF
-
-# Display completion
-clear
-echo -e "${BLUE}================================${NC}"
-echo -e "${GREEN}   Installation Complete!${NC}"
-echo -e "${BLUE}================================${NC}"
-echo ""
-echo -e "Domain: ${YELLOW}$domain${NC}"
-echo -e "Services installed:"
-echo -e "  - SSH WebSocket (Port: $ws_port)"
-echo -e "  - VMess (V2Ray) (Port: 443)"
-if [[ $enable_hopping == "y" ]]; then
-    echo -e "  - Hysteria 2 (Port Hopping: $hysteria_ports)"
-    [[ $include_53 == "y" ]] && echo -e "    + Port 53 included"
-else
-    echo -e "  - Hysteria 2 (Port: $hysteria_port)"
-fi
-echo -e "  - UDP Custom (Port 53)"
-echo -e "  - Dropbear SSH (Port 442)"
-echo -e "  - HTTP Proxy (Port 3128)"
-echo -e "  - SOCKS5 Proxy (Port 1080)"
-echo -e "  - TCP BBR enabled"
-echo ""
-echo -e "Type ${GREEN}menu${NC} to access the management panel"
-echo ""
+echo -e "\n\e[0;32m✓ AFTERLIFE VPN Installation Complete!\e[0m"
+echo -e "\e[1;37mType 'menu' or 'afterlife' to launch the dashboard.\e[0m\n"
