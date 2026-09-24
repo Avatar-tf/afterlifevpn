@@ -62,20 +62,21 @@ fi
 echo ""
 
 # Update system
-echo -e "${GREEN}[1/8] Updating system...${NC}"
+echo -e "${GREEN}[1/13] Updating system...${NC}"
 apt update && apt upgrade -y
 
 # Install basic dependencies
-echo -e "${GREEN}[2/8] Installing dependencies...${NC}"
-apt install -y wget curl git nano socat jq lsb-release iptables-persistent
+echo -e "${GREEN}[2/13] Installing dependencies...${NC}"
+apt install -y wget curl git nano socat jq lsb-release iptables-persistent python3 python3-pip apache2-utils qrencode
 
 # Download setup scripts
-echo -e "${GREEN}[3/8] Downloading setup modules...${NC}"
+echo -e "${GREEN}[3/13] Downloading setup modules...${NC}"
 mkdir -p /usr/local/afterlifevpn/setup
 mkdir -p /usr/local/afterlifevpn/menu
+mkdir -p /usr/local/afterlifevpn/users
 
-# Base URL - REPLACE YOUR_USERNAME with your actual GitHub username
-BASE_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+# Base URL - UPDATE THIS with your GitLab username/repo
+BASE_URL="https://gitlab.com/Avatar-tf/afterlifevpn/-/raw/main"
 
 # Download all setup scripts
 wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh "$BASE_URL/setup/ssh-ws.sh"
@@ -85,6 +86,15 @@ wget -q -O /usr/local/afterlifevpn/setup/udp.sh "$BASE_URL/setup/udp.sh"
 wget -q -O /usr/local/afterlifevpn/setup/ssl.sh "$BASE_URL/setup/ssl.sh"
 wget -q -O /usr/local/afterlifevpn/setup/bbr.sh "$BASE_URL/setup/bbr.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dropbear.sh "$BASE_URL/setup/dropbear.sh"
+wget -q -O /usr/local/afterlifevpn/setup/squid.sh "$BASE_URL/setup/squid.sh"
+wget -q -O /usr/local/afterlifevpn/setup/dante.sh "$BASE_URL/setup/dante.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh "$BASE_URL/setup/xray-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$BASE_URL/setup/hysteria-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/backup.sh "$BASE_URL/setup/backup.sh"
+wget -q -O /usr/local/afterlifevpn/setup/restore.sh "$BASE_URL/setup/restore.sh"
+wget -q -O /usr/local/afterlifevpn/setup/clear-log.sh "$BASE_URL/setup/clear-log.sh"
+wget -q -O /usr/local/afterlifevpn/setup/running.sh "$BASE_URL/setup/running.sh"
+wget -q -O /usr/local/afterlifevpn/setup/limit-speed.sh "$BASE_URL/setup/limit-speed.sh"
 wget -q -O /usr/local/afterlifevpn/menu/menu.sh "$BASE_URL/menu/menu.sh"
 
 # Make scripts executable
@@ -92,28 +102,38 @@ chmod +x /usr/local/afterlifevpn/setup/*.sh
 chmod +x /usr/local/afterlifevpn/menu/*.sh
 
 # Run setup scripts
-echo -e "${GREEN}[4/8] Setting up TCP BBR...${NC}"
+echo -e "${GREEN}[4/13] Setting up TCP BBR...${NC}"
 bash /usr/local/afterlifevpn/setup/bbr.sh
 
-echo -e "${GREEN}[5/8] Setting up SSL certificates...${NC}"
+echo -e "${GREEN}[5/13] Setting up SSL certificates...${NC}"
 bash /usr/local/afterlifevpn/setup/ssl.sh "$domain" "$email"
 
-echo -e "${GREEN}[6/8] Setting up SSH WebSocket...${NC}"
+echo -e "${GREEN}[6/13] Setting up SSH WebSocket...${NC}"
 bash /usr/local/afterlifevpn/setup/ssh-ws.sh "$domain" "$ws_port"
 
-echo -e "${GREEN}[7/8] Setting up Dropbear...${NC}"
+echo -e "${GREEN}[7/13] Setting up Dropbear...${NC}"
 bash /usr/local/afterlifevpn/setup/dropbear.sh
 
-echo -e "${GREEN}[8/8] Setting up VMess, Hysteria, and UDP...${NC}"
+echo -e "${GREEN}[8/13] Setting up VMess (Xray)...${NC}"
 bash /usr/local/afterlifevpn/setup/vmess.sh "$domain"
 
+echo -e "${GREEN}[9/13] Setting up Hysteria 2...${NC}"
 if [[ $enable_hopping == "y" ]]; then
     bash /usr/local/afterlifevpn/setup/hysteria.sh "$domain" "hopping" "$hysteria_ports" "$include_53"
 else
     bash /usr/local/afterlifevpn/setup/hysteria.sh "$domain" "single" "$hysteria_port"
 fi
 
+echo -e "${GREEN}[10/13] Setting up UDP Custom...${NC}"
 bash /usr/local/afterlifevpn/setup/udp.sh
+
+echo -e "${GREEN}[11/13] Setting up HTTP Proxy (Squid)...${NC}"
+bash /usr/local/afterlifevpn/setup/squid.sh
+
+echo -e "${GREEN}[12/13] Setting up SOCKS5 Proxy (Dante)...${NC}"
+bash /usr/local/afterlifevpn/setup/dante.sh
+
+echo -e "${GREEN}[13/13] Finalizing installation...${NC}"
 
 # Create menu command
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
@@ -128,6 +148,17 @@ HYSTERIA_PORTS=$hysteria_ports
 HYSTERIA_PORT=$hysteria_port
 INCLUDE_53=$include_53
 INSTALL_DATE=$(date)
+VERSION=1.0.0
+EOF
+
+# Create default SSH banner
+cat > /etc/issue.net <<EOF
+════════════════════════════════════════
+        AFTERLIFE VPN Server
+════════════════════════════════════════
+ No DDOS | No Torrent | No Mining
+ No Hacking | No Spam
+════════════════════════════════════════
 EOF
 
 # Display completion
@@ -148,6 +179,8 @@ else
 fi
 echo -e "  - UDP Custom (Port 53)"
 echo -e "  - Dropbear SSH (Port 442)"
+echo -e "  - HTTP Proxy (Port 3128)"
+echo -e "  - SOCKS5 Proxy (Port 1080)"
 echo -e "  - TCP BBR enabled"
 echo ""
 echo -e "Type ${GREEN}menu${NC} to access the management panel"
