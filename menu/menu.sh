@@ -950,19 +950,56 @@ view_certificate() {
 
 update_script() {
     show_header "› System › Update"
-    echo -e "  ${YELLOW}Checking for updates...${NC}"
+    echo -e "  ${YELLOW}Checking for updates from GitHub...${NC}\n"
     
-    wget -q -O /tmp/menu.sh "https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/menu/menu.sh"
-    if [ $? -eq 0 ]; then
-        cp /tmp/menu.sh /usr/local/afterlifevpn/menu/menu.sh
+    local REPO_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+    local SUCCESS=true
+    
+    # Create temporary directory for downloads
+    mkdir -p /tmp/afterlife-update
+    
+    echo -e "  ${WHITE}Pulling menu system...${NC}"
+    wget -q -O /tmp/afterlife-update/menu.sh "$REPO_URL/menu/menu.sh" || SUCCESS=false
+    
+    echo -e "  ${WHITE}Pulling setup & user scripts...${NC}"
+    wget -q -O /tmp/afterlife-update/xray-user.sh "$REPO_URL/setup/xray-user.sh" || SUCCESS=false
+    wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
+    wget -q -O /tmp/afterlife-update/add-ssh.sh "$REPO_URL/setup/add-ssh.sh" 2>/dev/null
+    
+    if [ "$SUCCESS" = true ]; then
+        # Apply updates to the system directories
+        cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh
+        cp /tmp/afterlife-update/xray-user.sh /usr/local/afterlifevpn/setup/xray-user.sh
+        cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
+        
+        # Only copy SSH script if it exists in the repo
+        if [ -s /tmp/afterlife-update/add-ssh.sh ]; then
+            cp /tmp/afterlife-update/add-ssh.sh /usr/local/afterlifevpn/setup/add-ssh.sh
+            chmod +x /usr/local/afterlifevpn/setup/add-ssh.sh
+        fi
+        
+        # Set execution permissions
         chmod +x /usr/local/afterlifevpn/menu/menu.sh
-        echo -e "\n  ${GREEN}✓ Menu updated successfully!${NC}"
-        echo -e "  ${YELLOW}⚠ Restart menu to apply changes${NC}"
+        chmod +x /usr/local/afterlifevpn/setup/xray-user.sh
+        chmod +x /usr/local/afterlifevpn/setup/hysteria-user.sh
+        
+        # Create global shortcuts (allows typing 'menu' or 'afterlife' from any directory)
+        ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
+        ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
+        
+        # Cleanup
+        rm -rf /tmp/afterlife-update
+        
+        echo -e "\n  ${GREEN}✓ All AFTERLIFE scripts updated successfully!${NC}"
+        echo -e "  ${YELLOW}⚠ Global shortcuts activated: Type 'menu' or 'afterlife' to launch.${NC}"
+        echo -e "  ${YELLOW}⚠ Restart menu to apply changes.${NC}"
     else
-        echo -e "\n  ${RED}✗ Update failed!${NC}"
+        echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or files are missing.${NC}"
     fi
+    
     echo ""
     read -p "  Press enter to continue..."
+    
 }
 
 full_diagnostics() {
