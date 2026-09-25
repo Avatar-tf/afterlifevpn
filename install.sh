@@ -51,7 +51,17 @@ server {
     server_name _;
     ssl_certificate /etc/afterlifevpn/cert/fullchain.crt;
     ssl_certificate_key /etc/afterlifevpn/cert/private.key;
+    
+    # VMESS WS Routing
     location /vmess { if (\$http_upgrade != "websocket") { return 404; } proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host \$host; }
+    
+    # VLESS WS Routing
+    location /vless { if (\$http_upgrade != "websocket") { return 404; } proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host \$host; }
+    
+    # TROJAN WS Routing
+    location /trojan { if (\$http_upgrade != "websocket") { return 404; } proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host \$host; }
+    
+    # Default SSH Routing
     location / { proxy_pass http://127.0.0.1:8880; proxy_http_version 1.1; proxy_set_header Upgrade \$http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host \$host; }
 }
 EOF
@@ -60,10 +70,9 @@ rm /etc/nginx/sites-enabled/default 2>/dev/null
 systemctl restart nginx
 systemctl enable nginx
 
-echo -e "\e[1;33m[4/8] Installing Xray (VMess, Reality, SS2022)...\e[0m"
+echo -e "\e[1;33m[4/8] Installing Xray (VMess, VLess, Trojan, Reality, SS2022)...\e[0m"
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
-# Generate bulletproof cryptography
 REALITY_KEYS=$(xray x25519)
 PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep -i "Private" | awk '{print $NF}')
 PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep -i "Public" | awk '{print $NF}')
@@ -84,6 +93,20 @@ cat > /usr/local/etc/xray/config.json <<EOF
       "protocol": "vmess",
       "settings": { "clients": [ { "id": "$UUID", "alterId": 0 } ] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } }
+    },
+    {
+      "port": 10002,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": { "clients": [ { "id": "$UUID", "email": "admin@vless" } ], "decryption": "none" },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } }
+    },
+    {
+      "port": 10003,
+      "listen": "127.0.0.1",
+      "protocol": "trojan",
+      "settings": { "clients": [ { "password": "$UUID", "email": "admin@trojan" } ] },
+      "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } }
     },
     {
       "port": 8443,
@@ -185,7 +208,15 @@ wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh "$REPO/setup/xray-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh "$REPO/setup/dante.sh"
+
+# NEW: Automatically pull the missing files we just created
+wget -q -O /usr/local/afterlifevpn/setup/xray-add-vless.sh "$REPO/setup/xray-add-vless.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-add-trojan.sh "$REPO/setup/xray-add-trojan.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-online.sh "$REPO/setup/xray-online.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-renew.sh "$REPO/setup/xray-renew.sh"
+wget -q -O /usr/local/afterlifevpn/setup/xray-del.sh "$REPO/setup/xray-del.sh"
 wget -q -O /usr/local/afterlifevpn/setup/user-expire.sh "$REPO/setup/user-expire.sh"
+
 chmod +x /usr/local/afterlifevpn/menu/menu.sh
 chmod +x /usr/local/afterlifevpn/setup/*.sh
 
@@ -196,7 +227,7 @@ echo -e "\e[1;33m[8/8] Finalizing Setup & Automation...\e[0m"
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
 
-# Setup Auto-Expiry Cron Job natively during installation
+# NEW: Setup Auto-Expiry Cron Job natively during installation
 if ! crontab -l 2>/dev/null | grep -q "user-expire.sh"; then
     (crontab -l 2>/dev/null; echo "0 0 * * * bash /usr/local/afterlifevpn/setup/user-expire.sh") | crontab -
 fi
