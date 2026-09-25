@@ -1,5 +1,6 @@
 #!/bin/bash
 # AFTERLIFE - Domain / Host / Nameserver Management
+# GitHub path: setup/add-host-ssh.sh
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -15,7 +16,6 @@ NS_FILE="/usr/local/afterlifevpn/nameserver.conf"
 mkdir -p /usr/local/afterlifevpn
 mkdir -p /etc/afterlifevpn/cert
 
-# Load config with error handling
 if [ ! -f "$CONFIG" ]; then
     echo -e "${RED}Error: Config file not found:${NC} $CONFIG"
     echo -e "${YELLOW}Run the main AFTERLIFE installer first.${NC}"
@@ -114,115 +114,4 @@ case $option in
                 ~/.acme.sh/acme.sh --remove -d "$domain" 2>/dev/null
                 rm -rf "/etc/afterlifevpn/cert/$domain"
                 sed -i "${num}d" "$DOMAINS_FILE"
-                echo -e "${GREEN}Domain $domain removed!${NC}"
-            else
-                echo -e "${RED}Invalid selection${NC}"
-            fi
-        else
-            echo "No additional domains configured"
-        fi
-        ;;
-    4)
-        clear
-        echo -e "${YELLOW}Set Primary Domain${NC}"
-        echo ""
-        if [ -f "$DOMAINS_FILE" ] && [ -s "$DOMAINS_FILE" ]; then
-            nl -w2 -s'. ' "$DOMAINS_FILE"
-            echo ""
-            read -p "Enter domain number to set as primary: " num
-            domain=$(sed -n "${num}p" "$DOMAINS_FILE")
-
-            if [ -n "$domain" ]; then
-                if grep -q "^DOMAIN=" "$CONFIG"; then
-                    sed -i "s/^DOMAIN=.*/DOMAIN=$domain/" "$CONFIG"
-                else
-                    echo "DOMAIN=$domain" >> "$CONFIG"
-                fi
-                echo -e "${GREEN}Primary domain set to: $domain${NC}"
-                echo -e "${YELLOW}Restart services to apply changes${NC}"
-            else
-                echo -e "${RED}Invalid selection${NC}"
-            fi
-        else
-            echo "No additional domains configured"
-        fi
-        ;;
-    5)
-        clear
-        echo -e "${CYAN}================================${NC}"
-        echo -e "${GREEN}   Nameserver Setup (SlowDNS)${NC}"
-        echo -e "${CYAN}================================${NC}"
-        echo ""
-        echo -e "Current domain : ${YELLOW}${DOMAIN:-Not set}${NC}"
-        echo -e "Server IP      : ${YELLOW}$PUBLIC_IP${NC}"
-        echo ""
-
-        if [ -z "$DOMAIN" ]; then
-            echo -e "${RED}Primary domain is not set in config.conf${NC}"
-            read -p "Press enter to continue..."
-            exit 1
-        fi
-
-        echo "Suggested nameserver host:"
-        echo -e "  ${GREEN}ns.${DOMAIN}${NC}"
-        echo ""
-        read -p "Enter nameserver host [default ns.${DOMAIN}]: " ns_host
-        ns_host=${ns_host:-ns.${DOMAIN}}
-
-        if [[ -z "$ns_host" ]]; then
-            echo -e "${RED}Nameserver cannot be empty.${NC}"
-            read -p "Press enter to continue..."
-            exit 1
-        fi
-
-        cat > "$NS_FILE" <<EOF
-NS_HOST=$ns_host
-NS_IP=$PUBLIC_IP
-DOMAIN=$DOMAIN
-EOF
-
-        echo ""
-        echo -e "${GREEN}Saved nameserver config.${NC}"
-        echo ""
-        echo -e "${YELLOW}Add these DNS records at your domain registrar:${NC}"
-        echo ""
-        echo "  Type : A"
-        echo "  Name : $ns_host"
-        echo "  Value: $PUBLIC_IP"
-        echo "  TTL  : 300"
-        echo ""
-        echo "  Type : NS"
-        echo "  Name : sl"
-        echo "  Value: $ns_host"
-        echo ""
-        echo "Example SlowDNS target later:"
-        echo -e "  ${GREEN}sl.${DOMAIN}${NC}"
-        echo ""
-        echo -e "${YELLOW}Note:${NC} This only stores nameserver info."
-        echo "dnstt is not installed by this step."
-        ;;
-    6)
-        clear
-        echo -e "${YELLOW}Nameserver Info${NC}"
-        echo ""
-        if [ -f "$NS_FILE" ]; then
-            # shellcheck disable=SC1090
-            source "$NS_FILE"
-            echo -e " Nameserver : ${GREEN}${NS_HOST}${NC}"
-            echo -e " Points to  : ${GREEN}${NS_IP}${NC}"
-            echo -e " Domain     : ${GREEN}${DOMAIN}${NC}"
-        else
-            echo -e "${RED}No nameserver configured yet.${NC}"
-            echo "Use option 5 first."
-        fi
-        echo ""
-        ;;
-    0)
-        exit 0
-        ;;
-    *)
-        echo -e "${RED}Invalid option${NC}"
-        ;;
-esac
-
-read -p "Press enter to continue..."
+                echo -e 
