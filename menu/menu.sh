@@ -913,11 +913,11 @@ list_backups() {
 # DOMAIN MANAGEMENT
 # ============================================================================
 run_add_host() {
-    if [ -f /usr/local/afterlifevpn/setup/add-host-ssh.sh ]; then
-        bash /usr/local/afterlifevpn/setup/add-host-ssh.sh
+    if [ -f /usr/local/afterlifevpn/setup/add-host.sh ]; then
+        bash /usr/local/afterlifevpn/setup/add-host.sh
     else
-        echo -e "  ${RED}Missing file:${NC} /usr/local/afterlifevpn/setup/add-host-ssh.sh"
-        echo "  Push setup/add-host-ssh.sh to GitHub, then run menu option U."
+        echo -e "  ${RED}Missing file:${NC} /usr/local/afterlifevpn/setup/add-host.sh"
+        echo "  Push setup/add-host.sh to GitHub, then run menu option U."
         read -p "  Press enter..."
     fi
 }
@@ -997,7 +997,7 @@ update_script() {
     wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
     wget -q -O /tmp/afterlife-update/hysteria.sh "$REPO_URL/setup/hysteria.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/ssh-ws.sh "$REPO_URL/setup/ssh-ws.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/add-host-ssh.sh "$REPO_URL/setup/add-host-ssh.sh" || SUCCESS=false
+    wget -q -O /tmp/afterlife-update/add-host.sh "$REPO_URL/setup/add-host.sh" || SUCCESS=false
 
     wget -q -O /tmp/afterlife-update/xray-add-vless.sh "$REPO_URL/setup/xray-add-vless.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/xray-add-trojan.sh "$REPO_URL/setup/xray-add-trojan.sh" 2>/dev/null
@@ -1012,7 +1012,7 @@ update_script() {
         cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
         cp /tmp/afterlife-update/hysteria.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/ssh-ws.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/add-host-ssh.sh /usr/local/afterlifevpn/setup/add-host-ssh.sh
+        cp /tmp/afterlife-update/add-host.sh /usr/local/afterlifevpn/setup/add-host.sh
 
         cp /tmp/afterlife-update/xray-add-vless.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/xray-add-trojan.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
@@ -1035,7 +1035,7 @@ update_script() {
         echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or critical files are missing.${NC}"
         echo -e "  ${YELLOW}Make sure these exist on GitHub:${NC}"
         echo "  menu/menu.sh"
-        echo "  setup/add-host-ssh.sh"
+        echo "  setup/add-host.sh"
         echo "  setup/hysteria.sh"
         echo "  setup/hysteria-user.sh"
     fi
@@ -1099,7 +1099,7 @@ full_diagnostics() {
         print_check "FAIL" "TLS cert missing"
     fi
     if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
-    if [ -f /usr/local/afterlifevpn/setup/add-host-ssh.sh ]; then print_check "PASS" "add-host-ssh script"; else print_check "FAIL" "add-host-ssh script missing"; fi
+    if [ -f /usr/local/afterlifevpn/setup/add-host.sh ]; then print_check "PASS" "add-host script"; else print_check "FAIL" "add-host script missing"; fi
     echo ""
     echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
