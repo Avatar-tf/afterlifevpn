@@ -1155,10 +1155,10 @@ while true; do
     show_dashboard
     read -p "  Select Option [1-10 / U / V / X]: " option
     
-    case $option in
+  case $option in
         1) menu_ssh ;;
-        2) menu_xray ;;
-        3) menu_hysteria ;;
+        2) bash /usr/local/afterlifevpn/setup/xray-user.sh ;;
+        3) bash /usr/local/afterlifevpn/setup/hysteria-user.sh ;;
         4) menu_wireguard ;;
         5) menu_l2tp ;;
         6) menu_subscriptions ;;
