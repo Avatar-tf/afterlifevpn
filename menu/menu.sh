@@ -131,11 +131,11 @@ show_dashboard() {
     echo -e "${CYAN}╭────────────────────────────────────────────────────────╮${NC}"
     echo -e "${CYAN}│${NC} ${WHITE}Protocol & System Management${NC}                           ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}                                                        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}1)${NC} SSH & Dropbear            ${GREEN}6)${NC} Subscriptions          ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}2)${NC} Xray Core Protocols       ${GREEN}7)${NC} TCP BBR Booster        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)         ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN             ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN       ${GREEN}10)${NC} Domain & Cert           ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}1)${NC} SSH & Dropbear             ${GREEN}6)${NC} Subscriptions          ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}2)${NC} Xray Core Protocols        ${GREEN}7)${NC} TCP BBR Booster        ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)          ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN              ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN        ${GREEN}10)${NC} Domain & Cert            ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
     echo -e ""
@@ -427,28 +427,54 @@ EOF
 }
 
 # ============================================================================
-# XRAY (VMESS) MANAGEMENT
+# XRAY MANAGEMENT (KUROVPN STYLE)
 # ============================================================================
 menu_xray() {
     while true; do
-        show_header "› Xray › Management"
-        echo -e "  ${GREEN}1)${NC} Show VMess Configuration"
-        echo -e "  ${GREEN}2)${NC} Create VMess Account"
-        echo -e "  ${GREEN}3)${NC} Delete VMess Account"
-        echo -e "  ${GREEN}4)${NC} List VMess Users"
-        echo -e "  ${GREEN}5)${NC} Restart Xray Service"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu"
-        echo ""
-        read -p "  Select option: " xray_option
-        
-        case $xray_option in
-            1) show_vmess_config ;;
-            2) create_vmess_user ;;
-            3) delete_vmess_user ;;
-            4) list_vmess_users ;;
-            5) systemctl restart xray; echo -e "  ${GREEN}✓ Xray restarted${NC}"; sleep 2 ;;
-            0) break ;;
-            *) ;;
+        clear
+        local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
+        echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
+        echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
+        echo -e "${CYAN}║ ${YELLOW}› Main › Xray${CYAN}                                          ║\n${NC}"
+        echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
+        echo -e ""
+        echo -e " ${CYAN}╭────────────────────────────────────────────────────────╮${NC}"
+        echo -e " ${CYAN}│${WHITE} Create Accounts                                        ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}                                                        ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}1)${NC} VMess (WS / gRPC)                                  ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}2)${NC} VLess (WS / gRPC / NTLS)                           ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}3)${NC} VLess Reality (Vision)                             ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}4)${NC} Trojan (WS / gRPC)                                 ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}5)${NC} Shadowsocks-2022                                   ${CYAN}│${NC}"
+        echo -e " ${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
+        echo -e ""
+        echo -e " ${CYAN}╭────────────────────────────────────────────────────────╮${NC}"
+        echo -e " ${CYAN}│${WHITE} Management                                             ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}                                                        ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}6)${NC} List All Xray Users                                ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}7)${NC} Renew User Account                                 ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}8)${NC} Delete User Account                                ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC}  ${GREEN}9)${NC} Check Online Users                                 ${CYAN}│${NC}"
+        echo -e " ${CYAN}│${NC} ${GREEN}10)${NC} Service Status                                     ${CYAN}│${NC}"
+        echo -e " ${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
+        echo -e ""
+        echo -e "  ${RED}X${NC} Back  · ${WHITE}$SERVER_HOST${NC}"
+        echo -e ""
+        read -p "  Select Option [1-10]: " sub_opt
+        case $sub_opt in
+            1) create_vmess_user ;;
+            2) bash /usr/local/afterlifevpn/setup/xray-add-vless.sh ;;
+            3) bash /usr/local/afterlifevpn/setup/xray-user.sh ;;
+            4) bash /usr/local/afterlifevpn/setup/xray-add-trojan.sh ;;
+            5) bash /usr/local/afterlifevpn/setup/xray-user.sh ;;
+            6) list_vmess_users ;;
+            7) bash /usr/local/afterlifevpn/setup/xray-renew.sh ;;
+            8) delete_vmess_user ;;
+            9) bash /usr/local/afterlifevpn/setup/xray-online.sh ;;
+            10) clear; echo -e "\n  ${YELLOW}Xray Status:${NC}"; systemctl status xray --no-pager | grep -E "Active|Started"; echo ""; read -p "  Press [Enter] to return..." ;;
+            X|x|0) break ;;
+            *) continue ;;
         esac
     done
 }
@@ -564,30 +590,37 @@ list_vmess_users() {
 }
 
 # ============================================================================
-# HYSTERIA 2 MANAGEMENT
+# HYSTERIA 2 MANAGEMENT (KUROVPN STYLE)
 # ============================================================================
 menu_hysteria() {
     while true; do
-        show_header "› Hysteria › Management"
-        echo -e "  ${GREEN}1)${NC} Show Hysteria Configuration"
-        echo -e "  ${GREEN}2)${NC} Create Hysteria Account"
-        echo -e "  ${GREEN}3)${NC} Delete Hysteria Account"
-        echo -e "  ${GREEN}4)${NC} List Hysteria Users"
-        echo -e "  ${GREEN}5)${NC} Change Port Mode (Single/Hopping)"
-        echo -e "  ${GREEN}6)${NC} Restart Hysteria Service"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu"
-        echo ""
-        read -p "  Select option: " hyst_option
-        
-        case $hyst_option in
-            1) show_hysteria_config ;;
-            2) create_hysteria_user ;;
-            3) delete_hysteria_user ;;
-            4) list_hysteria_users ;;
+        clear
+        local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
+        echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
+        echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
+        echo -e "${CYAN}║ ${YELLOW}› Main › Hysteria 2${CYAN}                                    ║\n${NC}"
+        echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
+        echo -e ""
+        echo -e "    ${GREEN}1)${NC}  Create Account"
+        echo -e "    ${GREEN}2)${NC}  List Accounts"
+        echo -e "    ${GREEN}3)${NC}  Renew Account"
+        echo -e "    ${GREEN}4)${NC}  Delete Account"
+        echo -e "    ${GREEN}5)${NC}  Change Port Mode (Single/Hopping)"
+        echo -e "    ${GREEN}6)${NC}  Service Status"
+        echo -e ""
+        echo -e "  ${RED}X${NC} Back  · ${WHITE}$SERVER_HOST${NC}"
+        echo -e ""
+        read -p "  Select [1-6]: " sub_opt
+        case $sub_opt in
+            1) create_hysteria_user ;;
+            2) list_hysteria_users ;;
+            3) bash /usr/local/afterlifevpn/setup/hys-renew.sh ;;
+            4) delete_hysteria_user ;;
             5) change_hysteria_mode ;;
-            6) systemctl restart hysteria; echo -e "  ${GREEN}✓ Hysteria restarted${NC}"; sleep 2 ;;
-            0) break ;;
-            *) ;;
+            6) clear; echo -e "\n  ${YELLOW}Hysteria Status:${NC}"; systemctl status hysteria-server.service --no-pager | grep -E "Active|Started"; echo ""; read -p "  Press [Enter] to return..." ;;
+            X|x|0) break ;;
+            *) continue ;;
         esac
     done
 }
@@ -1155,9 +1188,9 @@ while true; do
     show_dashboard
     read -p "  Select Option [1-10 / U / V / X]: " option
     
-  case $option in
+    case $option in
         1) menu_ssh ;;
-        2) bash /usr/local/afterlifevpn/setup/xray-user.sh ;;
+        2) menu_xray ;;
         3) menu_hysteria ;;
         4) menu_wireguard ;;
         5) menu_l2tp ;;
