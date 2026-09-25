@@ -23,7 +23,6 @@ echo -e "\e[1;33m[1/8] Updating System & Installing Dependencies...\e[0m"
 apt-get update -y && apt-get upgrade -y
 apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3-websockets nginx socat cron wireguard iptables-persistent net-tools
 
-# Create Directory Structure
 mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
 mkdir -p /etc/afterlifevpn/cert
 echo "DOMAIN=$DOMAIN" > /usr/local/afterlifevpn/config.conf
@@ -63,15 +62,18 @@ systemctl enable nginx
 
 echo -e "\e[1;33m[4/8] Installing Xray (VMess, Reality, SS2022)...\e[0m"
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+# Generate bulletproof cryptography
 REALITY_KEYS=$(xray x25519)
-PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep "Private key" | awk '{print $3}')
-PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep "Public key" | awk '{print $3}')
-SS_KEY=$(openssl rand -base64 16)
-UUID=$(cat /proc/sys/kernel/random/uuid)
+PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep -i "Private" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$REALITY_KEYS" | grep -i "Public" | awk '{print $NF}')
+SERVER_KEY=$(openssl rand -base64 16)
+USER_KEY=$(openssl rand -base64 16)
+UUID=$(uuidgen)
 
 echo "REALITY_PRIVATE=$PRIVATE_KEY" > /usr/local/afterlifevpn/reality.key
 echo "REALITY_PUBLIC=$PUBLIC_KEY" >> /usr/local/afterlifevpn/reality.key
-echo "SS2022_KEY=$SS_KEY" > /usr/local/afterlifevpn/ss2022.key
+echo "SS2022_KEY=$SERVER_KEY" > /usr/local/afterlifevpn/ss2022.key
 
 cat > /usr/local/etc/xray/config.json <<EOF
 {
@@ -80,7 +82,7 @@ cat > /usr/local/etc/xray/config.json <<EOF
       "port": 10001,
       "listen": "127.0.0.1",
       "protocol": "vmess",
-      "settings": { "clients": [] },
+      "settings": { "clients": [ { "id": "$UUID", "alterId": 0 } ] },
       "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } }
     },
     {
@@ -107,9 +109,10 @@ cat > /usr/local/etc/xray/config.json <<EOF
       "port": 10010,
       "protocol": "shadowsocks",
       "settings": {
-        "clients": [ { "password": "$SS_KEY", "email": "ss2022@afterlife" } ],
+        "password": "$SERVER_KEY",
         "method": "2022-blake3-aes-128-gcm",
-        "network": "tcp,udp"
+        "network": "tcp,udp",
+        "clients": [ { "password": "$USER_KEY", "email": "ss2022@afterlife" } ]
       }
     }
   ],
@@ -140,13 +143,11 @@ systemctl enable hysteria-server.service
 systemctl restart hysteria-server.service
 
 echo -e "\e[1;33m[6/8] Configuring Dropbear, BadVPN, WireGuard, & Ports...\e[0m"
-# Dropbear to 109
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/g' /etc/default/dropbear
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/g' /etc/default/dropbear
 if ! grep -q "/bin/false" /etc/shells; then echo "/bin/false" >> /etc/shells; fi
 systemctl restart dropbear
 
-# BadVPN on 7300
 wget -qO /usr/bin/badvpn-udpgw "https://raw.githubusercontent.com/daybreakersx/premscript/master/badvpn-udpgw64"
 chmod +x /usr/bin/badvpn-udpgw
 cat > /etc/systemd/system/badvpn.service << 'EOF'
@@ -164,7 +165,6 @@ systemctl daemon-reload
 systemctl enable badvpn
 systemctl start badvpn
 
-# WireGuard on 2048
 cat > /etc/wireguard/wg0.conf <<EOF
 [Interface]
 PrivateKey = $(wg genkey)
@@ -175,7 +175,6 @@ EOF
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
 
-# Hysteria UDP Port 53 Mapping
 iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 443
 netfilter-persistent save
 
