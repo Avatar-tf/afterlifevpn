@@ -1158,7 +1158,7 @@ while true; do
   case $option in
         1) menu_ssh ;;
         2) bash /usr/local/afterlifevpn/setup/xray-user.sh ;;
-        3) bash /usr/local/afterlifevpn/setup/hysteria-user.sh ;;
+        3) menu_hysteria ;;
         4) menu_wireguard ;;
         5) menu_l2tp ;;
         6) menu_subscriptions ;;
