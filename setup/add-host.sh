@@ -15,11 +15,25 @@ NS_FILE="/usr/local/afterlifevpn/nameserver.conf"
 mkdir -p /usr/local/afterlifevpn
 mkdir -p /etc/afterlifevpn/cert
 
-if [ -f "$CONFIG" ]; then
-    source "$CONFIG"
+# Load config with error handling
+if [ ! -f "$CONFIG" ]; then
+    echo -e "${RED}Error: Config file not found:${NC} $CONFIG"
+    echo -e "${YELLOW}Run the main AFTERLIFE installer first.${NC}"
+    echo ""
+    read -p "Press enter to continue..."
+    exit 1
 fi
 
-PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "UNKNOWN")
+# shellcheck disable=SC1090
+source "$CONFIG"
+
+if [ -z "$DOMAIN" ]; then
+    echo -e "${YELLOW}Warning: DOMAIN is empty in $CONFIG${NC}"
+    echo "Some options will be limited until a primary domain is set."
+    echo ""
+fi
+
+PUBLIC_IP=$(curl -s --max-time 8 ifconfig.me 2>/dev/null || curl -s --max-time 8 icanhazip.com 2>/dev/null || echo "UNKNOWN")
 
 clear
 echo -e "${BLUE}================================${NC}"
@@ -50,24 +64,22 @@ case $option in
 
         echo -e "${YELLOW}Adding domain: $new_domain${NC}"
 
-        # Stop nginx briefly if standalone cert is used (port 80 must be free)
         systemctl stop nginx 2>/dev/null
-
         ~/.acme.sh/acme.sh --issue -d "$new_domain" --standalone --accountemail "$email"
         issue_ok=$?
-
         systemctl start nginx 2>/dev/null
 
         if [ $issue_ok -ne 0 ]; then
-            echo -e "${RED}Failed to issue certificate. Make sure the domain points to this server.${NC}"
+            echo -e "${RED}Failed to issue certificate.${NC}"
+            echo "Make sure the domain A record points to this server and port 80 is free."
             read -p "Press enter to continue..."
             exit 1
         fi
 
-        mkdir -p /etc/afterlifevpn/cert/$new_domain
+        mkdir -p "/etc/afterlifevpn/cert/$new_domain"
         ~/.acme.sh/acme.sh --installcert -d "$new_domain" \
-            --key-file /etc/afterlifevpn/cert/$new_domain/private.key \
-            --fullchain-file /etc/afterlifevpn/cert/$new_domain/fullchain.crt
+            --key-file "/etc/afterlifevpn/cert/$new_domain/private.key" \
+            --fullchain-file "/etc/afterlifevpn/cert/$new_domain/fullchain.crt"
 
         touch "$DOMAINS_FILE"
         grep -qxF "$new_domain" "$DOMAINS_FILE" || echo "$new_domain" >> "$DOMAINS_FILE"
@@ -100,7 +112,7 @@ case $option in
 
             if [ -n "$domain" ]; then
                 ~/.acme.sh/acme.sh --remove -d "$domain" 2>/dev/null
-                rm -rf /etc/afterlifevpn/cert/$domain
+                rm -rf "/etc/afterlifevpn/cert/$domain"
                 sed -i "${num}d" "$DOMAINS_FILE"
                 echo -e "${GREEN}Domain $domain removed!${NC}"
             else
@@ -121,7 +133,7 @@ case $option in
             domain=$(sed -n "${num}p" "$DOMAINS_FILE")
 
             if [ -n "$domain" ]; then
-                if grep -q "^DOMAIN=" "$CONFIG" 2>/dev/null; then
+                if grep -q "^DOMAIN=" "$CONFIG"; then
                     sed -i "s/^DOMAIN=.*/DOMAIN=$domain/" "$CONFIG"
                 else
                     echo "DOMAIN=$domain" >> "$CONFIG"
@@ -144,14 +156,21 @@ case $option in
         echo -e "Current domain : ${YELLOW}${DOMAIN:-Not set}${NC}"
         echo -e "Server IP      : ${YELLOW}$PUBLIC_IP${NC}"
         echo ""
+
+        if [ -z "$DOMAIN" ]; then
+            echo -e "${RED}Primary domain is not set in config.conf${NC}"
+            read -p "Press enter to continue..."
+            exit 1
+        fi
+
         echo "Suggested nameserver host:"
-        echo -e "  ${GREEN}ns.${DOMAIN:-yourdomain.com}${NC}"
+        echo -e "  ${GREEN}ns.${DOMAIN}${NC}"
         echo ""
         read -p "Enter nameserver host [default ns.${DOMAIN}]: " ns_host
         ns_host=${ns_host:-ns.${DOMAIN}}
 
-        if [[ -z "$DOMAIN" || -z "$ns_host" ]]; then
-            echo -e "${RED}Domain / nameserver cannot be empty.${NC}"
+        if [[ -z "$ns_host" ]]; then
+            echo -e "${RED}Nameserver cannot be empty.${NC}"
             read -p "Press enter to continue..."
             exit 1
         fi
@@ -173,20 +192,21 @@ EOF
         echo "  TTL  : 300"
         echo ""
         echo "  Type : NS"
-        echo "  Name : sl (or any SlowDNS prefix you want)"
+        echo "  Name : sl"
         echo "  Value: $ns_host"
         echo ""
         echo "Example SlowDNS target later:"
         echo -e "  ${GREEN}sl.${DOMAIN}${NC}"
         echo ""
-        echo -e "${YELLOW}Note:${NC} dnstt itself is not installed by this step."
-        echo "This only stores the nameserver info for the Port 53 menu."
+        echo -e "${YELLOW}Note:${NC} This only stores nameserver info."
+        echo "dnstt is not installed by this step."
         ;;
     6)
         clear
         echo -e "${YELLOW}Nameserver Info${NC}"
         echo ""
         if [ -f "$NS_FILE" ]; then
+            # shellcheck disable=SC1090
             source "$NS_FILE"
             echo -e " Nameserver : ${GREEN}${NS_HOST}${NC}"
             echo -e " Points to  : ${GREEN}${NS_IP}${NC}"
