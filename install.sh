@@ -185,15 +185,21 @@ wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh "$REPO/setup/xray-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh "$REPO/setup/dante.sh"
+wget -q -O /usr/local/afterlifevpn/setup/user-expire.sh "$REPO/setup/user-expire.sh"
 chmod +x /usr/local/afterlifevpn/menu/menu.sh
 chmod +x /usr/local/afterlifevpn/setup/*.sh
 
 bash /usr/local/afterlifevpn/setup/squid.sh
 bash /usr/local/afterlifevpn/setup/dante.sh
 
-echo -e "\e[1;33m[8/8] Finalizing Setup...\e[0m"
+echo -e "\e[1;33m[8/8] Finalizing Setup & Automation...\e[0m"
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
+
+# Setup Auto-Expiry Cron Job natively during installation
+if ! crontab -l 2>/dev/null | grep -q "user-expire.sh"; then
+    (crontab -l 2>/dev/null; echo "0 0 * * * bash /usr/local/afterlifevpn/setup/user-expire.sh") | crontab -
+fi
 
 echo -e "\n\e[0;32m✓ AFTERLIFE VPN Installation Complete!\e[0m"
 echo -e "\e[1;37mType 'menu' or 'afterlife' to launch the dashboard.\e[0m\n"
