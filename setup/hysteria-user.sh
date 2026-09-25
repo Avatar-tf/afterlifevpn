@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==========================================================
-# AFTERLIFE - Hysteria 2 User Management
+# AFTERLIFE - Hysteria 2 User Management (Improved)
 # ==========================================================
 
 USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
@@ -17,58 +17,68 @@ NC='\033[0m'
 mkdir -p /usr/local/afterlifevpn/users
 touch "$USERS_FILE"
 
-# Load domain and hysteria config
+# Load domain
 if [[ -f "$DOMAIN_FILE" ]]; then
     source "$DOMAIN_FILE"
 else
-    echo -e "${RED}Error: Domain config not found.${NC}"
+    echo -e "\( {RED}Error: Domain config not found. \){NC}"
     exit 1
 fi
 
+# Load hysteria config (port, mode, etc.)
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
 else
-    PORT=36712
-    MODE="single"
+    PORT=443
+    MODE="443"
     SALAMANDER="n"
 fi
 
-# Generate both links for a user
+# ==========================================
+# Generate links (ItzDaJohn style)
+# ==========================================
 generate_links() {
     local user=$1
     local pass=$2
     local remark=${3:-Afterlife-Hy2}
 
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         HYSTERIA 2 LINKS${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}         HYSTERIA 2 LINKS \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
-    echo -e "${GREEN}STANDARD LINK${NC}"
-    echo "hy2://${user}:${pass}@${DOMAIN}:${PORT}?insecure=1&sni=${DOMAIN}#${remark}"
+    echo -e " User       : $user"
+    echo -e " Password   : $pass"
+    echo -e " Port       : $PORT (UDP)"
+    echo -e " Mode       : $MODE"
     echo
-    echo -e "${GREEN}PORT-HOPPING LINK (harder to block)${NC}"
-    echo "hy2://${user}:${pass}@${DOMAIN}:${PORT},20000-50000?insecure=1&sni=${DOMAIN}#${remark}-Hop"
+    echo -e "\( {GREEN}STANDARD LINK \){NC}"
+    echo "hy2://\( {pass}@ \){DOMAIN}:\( {PORT}?insecure=1&sni= \){DOMAIN}#${remark}"
     echo
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {GREEN}PORT-HOPPING LINK (harder to block) \){NC}"
+    echo "hy2://\( {pass}@ \){DOMAIN}:\( {PORT},20000-50000?insecure=1&sni= \){DOMAIN}#${remark}-Hop"
+    echo
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
 }
 
+# ==========================================
+# Add User
+# ==========================================
 add_user() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         ADD HYSTERIA USER${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}         ADD HYSTERIA USER \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
 
     read -p "Username: " username
     if [[ -z "$username" ]]; then
-        echo -e "${RED}Username cannot be empty.${NC}"
+        echo -e "\( {RED}Username cannot be empty. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
 
-    # Check if user already exists
     if grep -q "^${username}|" "$USERS_FILE"; then
-        echo -e "${RED}User already exists.${NC}"
+        echo -e "\( {RED}User already exists. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
@@ -80,60 +90,61 @@ add_user() {
 
     read -p "Expiration days (default 30): " days
     days=${days:-30}
-    expiry=$(date -d "+${days} days" +%Y-%m-%d)
+    expiry=\( (date -d "+ \){days} days" +%Y-%m-%d)
 
     # Format: username|password|expiry
-    echo "${username}|${password}|${expiry}" >> "$USERS_FILE"
+    echo "\( {username}| \){password}|${expiry}" >> "$USERS_FILE"
 
     echo
-    echo -e "${GREEN}✓ User created successfully!${NC}"
+    echo -e "\( {GREEN}✓ User created successfully! \){NC}"
     echo
-    echo -e "Username   : $username"
-    echo -e "Password   : $password"
-    echo -e "Expiry     : $expiry"
-    echo
-
     generate_links "$username" "$password" "$username"
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+# ==========================================
+# Delete User
+# ==========================================
 delete_user() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         DELETE HYSTERIA USER${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}         DELETE HYSTERIA USER \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
 
     if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "${RED}No users found.${NC}"
+        echo -e "\( {RED}No users found. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
 
     echo -e "Current users:"
     echo
-    nl -w2 -s'. ' "$USERS_FILE" | cut -d'|' -f1
+    cut -d'|' -f1 "$USERS_FILE" | nl -w2 -s'. '
     echo
     read -p "Enter username to delete: " username
 
     if grep -q "^${username}|" "$USERS_FILE"; then
         sed -i "/^${username}|/d" "$USERS_FILE"
-        echo -e "${GREEN}✓ User '$username' deleted.${NC}"
+        echo -e "${GREEN}✓ User '\( username' deleted. \){NC}"
     else
-        echo -e "${RED}User not found.${NC}"
+        echo -e "\( {RED}User not found. \){NC}"
     fi
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+# ==========================================
+# List Users
+# ==========================================
 list_users() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         HYSTERIA USER LIST${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}         HYSTERIA USER LIST \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
 
     if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "${RED}No users found.${NC}"
+        echo -e "\( {RED}No users found. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
@@ -146,9 +157,9 @@ list_users() {
         exp_sec=$(date -d "$exp" +%s 2>/dev/null || echo 0)
         now_sec=$(date +%s)
         if [[ $now_sec -gt $exp_sec ]]; then
-            status="${RED}EXPIRED${NC}"
+            status="\( {RED}EXPIRED \){NC}"
         else
-            status="${GREEN}ACTIVE${NC}"
+            status="\( {GREEN}ACTIVE \){NC}"
         fi
         printf "%-4s %-18s %-16s %-12s %-10b\n" "$i" "$user" "$pass" "$exp" "$status"
         ((i++))
@@ -158,15 +169,18 @@ list_users() {
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+# ==========================================
+# Show User Link
+# ==========================================
 show_user_link() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}       SHOW HYSTERIA USER LINK${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}       SHOW HYSTERIA USER LINK \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
 
     if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "${RED}No users found.${NC}"
+        echo -e "\( {RED}No users found. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
@@ -177,9 +191,9 @@ show_user_link() {
     echo
     read -p "Enter username: " username
 
-    USER_RECORD=$(grep "^${username}|" "$USERS_FILE")
+    USER_RECORD=\( (grep "^ \){username}|" "$USERS_FILE")
     if [[ -z "$USER_RECORD" ]]; then
-        echo -e "${RED}User not found.${NC}"
+        echo -e "\( {RED}User not found. \){NC}"
         read -n 1 -s -r -p "Press any key to continue..."
         return
     fi
@@ -197,22 +211,24 @@ show_user_link() {
     read -n 1 -s -r -p "Press any key to continue..."
 }
 
+# ==========================================
 # Main Menu
+# ==========================================
 while true; do
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}      AFTERLIFE - HYSTERIA 2 MENU${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e "\( {YELLOW}      AFTERLIFE - HYSTERIA 2 MENU \){NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
     echo -e "  1) Add User"
     echo -e "  2) Delete User"
     echo -e "  3) List Users"
-    echo -e "  4) Show User Link (Standard + Hopping)"
+    echo -e "  4) Show User Link"
     echo -e "  5) Exit"
     echo
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e " Current Port : $PORT  |  Mode : $MODE"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
+    echo -e " Current Port : ${PORT} (UDP)  |  Mode : ${MODE}"
+    echo -e "\( {CYAN}══════════════════════════════════════════ \){NC}"
     echo
     read -p "Select option [1-5]: " opt
 
@@ -222,6 +238,6 @@ while true; do
         3) list_users ;;
         4) show_user_link ;;
         5) exit 0 ;;
-        *) echo -e "${RED}Invalid option${NC}"; sleep 1 ;;
+        *) echo -e "\( {RED}Invalid option \){NC}"; sleep 1 ;;
     esac
 done
