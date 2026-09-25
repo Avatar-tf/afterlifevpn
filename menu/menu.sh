@@ -21,7 +21,7 @@ if [ -f /usr/local/afterlifevpn/config.conf ]; then
     source /usr/local/afterlifevpn/config.conf
 fi
 
-# Get system information (Optimized to reduce subshells)
+# Get system information
 get_system_info() {
     HOSTNAME=$(hostname)
     PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "N/A")
@@ -37,29 +37,26 @@ get_system_info() {
     read TOTAL_DISK USED_DISK DISK_PERCENT <<< $(df -h / | awk 'NR==2{print $2, $3, $5}' | tr -d '%')
 }
 
-# Create progress bar (Fixed for UTF-8 Multi-byte Characters)
+# Create progress bar
 create_bar() {
     local percent=$1
     local width=12
     local filled=$((percent * width / 100))
     local empty=$((width - filled))
     
-    # Create empty variables for the bar sections
     local fill_bar=""
     local empty_bar=""
     
-    # Generate spaces matching the required lengths
     if [[ $filled -gt 0 ]]; then printf -v fill_bar "%${filled}s" ""; fi
     if [[ $empty -gt 0 ]]; then printf -v empty_bar "%${empty}s" ""; fi
     
-    # Safely replace spaces with multi-byte Unicode blocks natively in Bash
     fill_bar=${fill_bar// /█}
     empty_bar=${empty_bar// /░}
     
     printf "[%s%s]" "$fill_bar" "$empty_bar"
 }
 
-# Check service status (Quoted variables)
+# Check service status
 check_service() {
     if systemctl is-active --quiet "$1" 2>/dev/null; then
         echo -e "${GREEN}●${NC}"
@@ -178,7 +175,6 @@ menu_ssh() {
 
 create_ssh_user() {
     show_header "› SSH › Create Account"
-    
     local username password days devices quota
     read -p "  Username: " username
     if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
@@ -209,7 +205,6 @@ create_ssh_user() {
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
     local EXPIRY_DATE=$(date -d "+$days days" +"%Y-%m-%d")
     local WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
-    local DROPBEAR_PORT=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
     
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -220,29 +215,11 @@ create_ssh_user() {
     echo -e "   Password    : ${GREEN}$password${NC}"
     echo -e "   Expires     : ${RED}$EXPIRY_DATE${NC}"
     echo -e "   Devices     : ${YELLOW}$devices${NC}"
-    echo -e "   Data Quota  : ${YELLOW}$quota${NC}"
     echo -e "   ${CYAN}══════════════════════════════${NC}"
     echo -e " 🌐 ${WHITE}SERVER${NC}"
     echo -e "   Host        : ${GREEN}$SERVER_HOST${NC}"
     echo -e "   WS Ports    : ${YELLOW}80 / $WS_PORT${NC}"
     echo -e "   SSL Ports   : ${YELLOW}443 / 777${NC}"
-    echo -e "   UDP-Custom  : ${YELLOW}port 53 or 36712 (same login)${NC}"
-    echo -e "   ${CYAN}══════════════════════════════${NC}"
-    echo -e " 📡 ${WHITE}HTTP CUSTOM PAYLOADS${NC}"
-    echo -e "   ① Port 80 — WebSocket"
-    echo -e "   ${YELLOW}GET / HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
-    echo -e "   ${CYAN}══════════════════════════════${NC}"
-    echo -e "   ② Port 443 — WebSocket TLS (WSS)"
-    echo -e "   ${YELLOW}GET wss://$SERVER_HOST/ HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
-    echo -e "   ${CYAN}══════════════════════════════${NC}"
-    echo -e "   ③ CONNECT (proxy / injector)"
-    echo -e "   ${YELLOW}CONNECT $SERVER_HOST:80 HTTP/1.1[crlf]Host: $SERVER_HOST[crlf][crlf]${NC}"
-    echo -e "   ${CYAN}══════════════════════════════${NC}"
-    echo -e "   ④ Front-Inject — replace [bug] with your bug host"
-    echo -e "   ${YELLOW}GET http://[bug]/ HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
-    echo -e "   ${CYAN}══════════════════════════════${NC}"
-    echo -e "   ⑤ Header-Spoof (X-Online-Host)"
-    echo -e "   ${YELLOW}GET / HTTP/1.1[crlf]Host: $SERVER_HOST[crlf]X-Online-Host: $SERVER_HOST[crlf]X-Forward-Host: $SERVER_HOST[crlf]Upgrade: websocket[crlf][crlf]${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     
     local CONNECTION_STRING="ssh://$username:$password@$SERVER_HOST:22"
@@ -479,17 +456,6 @@ menu_xray() {
     done
 }
 
-show_vmess_config() {
-    show_header "› Xray › VMess Configuration"
-    if [ -f /usr/local/afterlifevpn/vmess-config.txt ]; then
-        cat /usr/local/afterlifevpn/vmess-config.txt
-    else
-        echo -e "  ${YELLOW}No configuration found${NC}"
-    fi
-    echo ""
-    read -p "  Press enter to continue..."
-}
-
 create_vmess_user() {
     show_header "› Xray › Create VMess Account"
     local username days
@@ -504,12 +470,10 @@ create_vmess_user() {
     fi
     
     local UUID=$(bash /usr/local/afterlifevpn/setup/xray-user.sh add "$username" "$days")
-    
     get_system_info
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
     local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
     
-    # Beautiful JSON Base64 Generation
     local VMESS_JSON=$(cat <<EOF
 {
   "v": "2",
@@ -567,8 +531,7 @@ delete_vmess_user() {
         return
     fi
     
-    bash /usr/local/afterlifevpn/setup/xray-user.sh delete "$username"
-    echo -e "\n  ${GREEN}✓ User '$username' deleted successfully!${NC}\n"
+    bash /usr/local/afterlifevpn/setup/xray-del.sh "$username"
     read -p "  Press enter to continue..."
 }
 
@@ -625,17 +588,6 @@ menu_hysteria() {
     done
 }
 
-show_hysteria_config() {
-    show_header "› Hysteria › Configuration"
-    if [ -f /usr/local/afterlifevpn/hysteria-config.txt ]; then
-        cat /usr/local/afterlifevpn/hysteria-config.txt
-    else
-        echo -e "  ${YELLOW}No configuration found${NC}"
-    fi
-    echo ""
-    read -p "  Press enter to continue..."
-}
-
 create_hysteria_user() {
     show_header "› Hysteria › Create Account"
     local username days
@@ -650,7 +602,6 @@ create_hysteria_user() {
     fi
     
     local PASSWORD=$(bash /usr/local/afterlifevpn/setup/hysteria-user.sh add "$username" "$days")
-    
     get_system_info
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
     local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
@@ -1019,11 +970,27 @@ update_script() {
     wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
     wget -q -O /tmp/afterlife-update/add-ssh.sh "$REPO_URL/setup/add-ssh.sh" 2>/dev/null
     
+    # NEW: KUROVPN backend scripts
+    wget -q -O /tmp/afterlife-update/xray-add-vless.sh "$REPO_URL/setup/xray-add-vless.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/xray-add-trojan.sh "$REPO_URL/setup/xray-add-trojan.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/xray-online.sh "$REPO_URL/setup/xray-online.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/xray-renew.sh "$REPO_URL/setup/xray-renew.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/xray-del.sh "$REPO_URL/setup/xray-del.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/user-expire.sh "$REPO_URL/setup/user-expire.sh" 2>/dev/null
+    
     if [ "$SUCCESS" = true ]; then
         # Apply updates to the system directories
         cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh
         cp /tmp/afterlife-update/xray-user.sh /usr/local/afterlifevpn/setup/xray-user.sh
         cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
+        
+        # Copy the new KUROVPN scripts if they downloaded successfully
+        cp /tmp/afterlife-update/xray-add-vless.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/xray-add-trojan.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/xray-online.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/xray-renew.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/xray-del.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/user-expire.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         
         # Only copy SSH script if it exists in the repo
         if [ -s /tmp/afterlife-update/add-ssh.sh ]; then
@@ -1031,12 +998,11 @@ update_script() {
             chmod +x /usr/local/afterlifevpn/setup/add-ssh.sh
         fi
         
-        # Set execution permissions
+        # Set execution permissions globally for all setup scripts
         chmod +x /usr/local/afterlifevpn/menu/menu.sh
-        chmod +x /usr/local/afterlifevpn/setup/xray-user.sh
-        chmod +x /usr/local/afterlifevpn/setup/hysteria-user.sh
+        chmod +x /usr/local/afterlifevpn/setup/*.sh
         
-        # Create global shortcuts (allows typing 'menu' or 'afterlife' from any directory)
+        # Create global shortcuts
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
         
@@ -1047,12 +1013,11 @@ update_script() {
         echo -e "  ${YELLOW}⚠ Global shortcuts activated: Type 'menu' or 'afterlife' to launch.${NC}"
         echo -e "  ${YELLOW}⚠ Restart menu to apply changes.${NC}"
     else
-        echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or files are missing.${NC}"
+        echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or critical files are missing.${NC}"
     fi
     
     echo ""
     read -p "  Press enter to continue..."
-    
 }
 
 full_diagnostics() {
@@ -1139,7 +1104,7 @@ full_diagnostics() {
         print_check "FAIL" "port 443/udp (hysteria)"
     fi
     
-    if netstat -uln 2>/dev/null | grep -E -q ":(53) "; then
+    if iptables-save 2>/dev/null | grep -q "dport 53"; then
         print_check "PASS" "port 53/udp (hysteria red)"
     else
         print_check "FAIL" "port 53/udp (hysteria red)"
