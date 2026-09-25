@@ -1082,7 +1082,7 @@ full_diagnostics() {
     if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
 
     echo ""
-    echo -e " ${WHITE}[ Ports ]${NC}"
+    echo -e " ${WHITE}[ Ports ]${NC}"echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
         if netstat -tuln 2>/dev/null | grep -q ":$1 "; then
             print_check "PASS" "port $1 ($2)"
@@ -1092,21 +1092,26 @@ full_diagnostics() {
     }
     
     check_port 443 "nginx"
-    check_port 80 "nginx"
-    check_port 22 "ssh"
-    check_port 442 "dropbear"
+    check_port 80  "nginx"
+    check_port 22  "ssh"
+    check_port 109 "dropbear"
     check_port 7300 "badvpn"
-    check_port 8880 "ws-ssh internal"
-    check_port 10001 "xray internal"
-    check_port 3128 "squid"
-    check_port 1080 "dante socks5"
+    check_port 2048 "wg"
+    check_port 8443 "reality"
+    check_port 10010 "ss2022"
     
-    if netstat -uln 2>/dev/null | grep -E -q ":(443|53|20000) "; then
-        print_check "PASS" "port udp (hysteria)"
+    if netstat -uln 2>/dev/null | grep -E -q ":(443) "; then
+        print_check "PASS" "port 443/udp (hysteria)"
     else
-        print_check "FAIL" "port udp (hysteria)"
+        print_check "FAIL" "port 443/udp (hysteria)"
     fi
-
+    
+    if netstat -uln 2>/dev/null | grep -E -q ":(53) "; then
+        print_check "PASS" "port 53/udp (hysteria red)"
+    else
+        print_check "FAIL" "port 53/udp (hysteria red)"
+    fi
+    
     echo ""
     echo -e " ${WHITE}[ Management ]${NC}"
     for cmd in menu wget qrencode tar nano; do
