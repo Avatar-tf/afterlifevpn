@@ -1082,7 +1082,7 @@ full_diagnostics() {
     if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
 
     echo ""
-    echo -e " ${WHITE}[ Ports ]${NC}"echo -e " ${WHITE}[ Ports ]${NC}"
+    echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
         if netstat -tuln 2>/dev/null | grep -q ":$1 "; then
             print_check "PASS" "port $1 ($2)"
