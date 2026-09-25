@@ -1,8 +1,8 @@
 #!/bin/bash
 # Enforce Root Privileges
 if [[ $EUID -ne 0 ]]; then
-   echo -e "\033[0;31mError: This script must be run as root.\033[0m"
-   exit 1
+    echo -e "\033[0;31mError: This script must be run as root.\033[0m"
+    exit 1
 fi
 
 # Colors
@@ -448,7 +448,7 @@ menu_xray() {
         clear
         local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
         echo -e "${CYAN}║ ${YELLOW}› Main › Xray${CYAN}                                          ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
@@ -597,9 +597,9 @@ menu_hysteria() {
         clear
         local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
-        echo -e "${CYAN}║ ${YELLOW}› Main › Hysteria 2${CYAN}                                    ║${NC}"
+        echo -e "${CYAN}║ ${YELLOW}› Main › Hysteria 2${CYAN}                                      ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
         echo -e ""
         echo -e "    ${GREEN}1)${NC}  Manage Users (Add / Delete / List / Links)"
@@ -658,7 +658,7 @@ menu_port53() {
         clear
         local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
         echo -e "${CYAN}║ ${YELLOW}› Main › Port 53 Toggle${CYAN}                                ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
@@ -1129,7 +1129,7 @@ full_diagnostics() {
     echo ""
     echo -e " ${WHITE}[ Management ]${NC}"
     for cmd in menu wget qrencode tar nano; do
-        if command -v "$cmd" &> /dev/null || [ "$cmd" == "menu" -a -f "/usr/local/afterlifevpn/menu/menu.sh" ]; then
+        if command -v "$cmd" &> /dev/null || [[ "$cmd" == "menu" && -f "/usr/local/afterlifevpn/menu/menu.sh" ]]; then
             print_check "PASS" "$cmd command"
         else
             print_check "FAIL" "$cmd command missing"
