@@ -913,14 +913,30 @@ menu_domain() {
     while true; do
         show_header "› Domain › Management"
         echo -e "  ${GREEN}1)${NC} Renew SSL Certificate"
-        echo -e "  ${GREEN}2)${NC} Change Domain"
-        echo -e "  ${GREEN}3)${NC} View Certificate Info"
+        echo -e "  ${GREEN}2)${NC} Add New Domain"
+        echo -e "  ${GREEN}3)${NC} List Domains"
+        echo -e "  ${GREEN}4)${NC} Set Primary Domain"
+        echo -e "  ${GREEN}5)${NC} Setup Nameserver (SlowDNS)"
+        echo -e "  ${GREEN}6)${NC} View Certificate / Nameserver Info"
         echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " domain_option
         case $domain_option in
             1) renew_certificate ;;
-            2) echo "Feature coming soon..."; sleep 2 ;;
-            3) view_certificate ;;
+            2) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
+            3) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
+            4) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
+            5) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
+            6) view_certificate
+               echo ""
+               if [ -f /usr/local/afterlifevpn/nameserver.conf ]; then
+                   echo -e "  ${WHITE}Nameserver file:${NC}"
+                   cat /usr/local/afterlifevpn/nameserver.conf
+               else
+                   echo -e "  ${YELLOW}No nameserver configured yet.${NC}"
+               fi
+               echo ""
+               read -p "  Press enter to continue..."
+               ;;
             0) break ;;
             *) ;;
         esac
