@@ -1026,6 +1026,26 @@ full_diagnostics() {
     clear
     get_system_info
     
+    local passed=0
+    local failed=0
+    local warnings=0
+    
+    # Helper function for printing checks
+    print_check() {
+        local status=$1
+        local text=$2
+        if [ "$status" == "PASS" ]; then
+            echo -e "  ${GREEN}[PASS]${NC} $text"
+            ((passed++))
+        elif [ "$status" == "WARN" ]; then
+            echo -e "  ${YELLOW}[WARN]${NC} $text"
+            ((warnings++))
+        else
+            echo -e "  ${RED}[FAIL]${NC} $text"
+            ((failed++))
+        fi
+    }
+    
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
     echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
@@ -1034,53 +1054,95 @@ full_diagnostics() {
     echo ""
     
     echo -e " ${WHITE}[ Services ]${NC}"
-    check_srv() {
-        if systemctl is-active --quiet "$1" 2>/dev/null; then
-            echo -e "  ${GREEN}[PASS]${NC} $1 is running"
+    for srv in nginx xray dropbear ssh ws-ssh badvpn hysteria squid danted; do
+        if systemctl is-active --quiet "$srv" 2>/dev/null; then
+            print_check "PASS" "$srv is running"
         else
-            echo -e "  ${RED}[FAIL]${NC} $1 is stopped or missing"
+            print_check "FAIL" "$srv is stopped/missing"
         fi
-    }
-    
-    check_srv nginx
-    check_srv xray
-    check_srv dropbear
-    check_srv ssh
-    check_srv ws-ssh
-    check_srv badvpn
-    check_srv hysteria
-    check_srv squid
-    check_srv danted
+    done
+
+    echo ""
+    echo -e " ${WHITE}[ Configuration ]${NC}"
+    if [ -f /usr/local/etc/xray/config.json ]; then print_check "PASS" "xray config valid"; else print_check "FAIL" "xray config missing"; fi
+    if command -v xray &> /dev/null; then print_check "PASS" "xray binary"; else print_check "FAIL" "xray binary missing"; fi
+    if [ -d /etc/nginx/sites-enabled ]; then print_check "PASS" "nginx config"; else print_check "FAIL" "nginx config missing"; fi
+    if [ -n "$DOMAIN" ]; then print_check "PASS" "domain set"; else print_check "WARN" "domain not configured"; fi
+    if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then 
+        print_check "PASS" "TLS cert exists"
+        if openssl x509 -checkend 86400 -noout -in /etc/afterlifevpn/cert/fullchain.crt &>/dev/null; then
+            print_check "PASS" "TLS cert not expired"
+        else
+            print_check "WARN" "TLS cert expiring soon or expired"
+        fi
+    else
+        print_check "FAIL" "TLS cert missing"
+        print_check "FAIL" "TLS cert not expired"
+    fi
+    if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
 
     echo ""
     echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
         if netstat -tuln 2>/dev/null | grep -q ":$1 "; then
-            echo -e "  ${GREEN}[PASS]${NC} port $1 ($2)"
+            print_check "PASS" "port $1 ($2)"
         else
-            echo -e "  ${RED}[FAIL]${NC} port $1 ($2)"
+            print_check "FAIL" "port $1 ($2)"
         fi
     }
-
-    check_port 443 "nginx / https"
-    check_port 80 "nginx / http"
+    
+    check_port 443 "nginx"
+    check_port 80 "nginx"
     check_port 22 "ssh"
     check_port 442 "dropbear"
-    check_port 7300 "badvpn udpgw"
+    check_port 7300 "badvpn"
     check_port 8880 "ws-ssh internal"
     check_port 10001 "xray internal"
     check_port 3128 "squid"
     check_port 1080 "dante socks5"
-    check_port 53 "hysteria udp"
+    
+    if netstat -uln 2>/dev/null | grep -E -q ":(443|53|20000) "; then
+        print_check "PASS" "port udp (hysteria)"
+    else
+        print_check "FAIL" "port udp (hysteria)"
+    fi
 
     echo ""
-    echo -e " ${WHITE}[ System ]${NC}"
-    echo -e "  ${GREEN}[PASS]${NC} CPU: ${CPU_USAGE}% (${CPU_CORES} Core)"
-    echo -e "  ${GREEN}[PASS]${NC} RAM: ${RAM_PERCENT}% (${USED_RAM}MB / ${TOTAL_RAM}MB)"
-    echo -e "  ${GREEN}[PASS]${NC} Active Users: $(count_users)"
+    echo -e " ${WHITE}[ Management ]${NC}"
+    for cmd in menu wget qrencode tar nano; do
+        if command -v "$cmd" &> /dev/null || [ "$cmd" == "menu" -a -f "/usr/local/afterlifevpn/menu/menu.sh" ]; then
+            print_check "PASS" "$cmd command"
+        else
+            print_check "FAIL" "$cmd command missing"
+        fi
+    done
+    
+    if grep -q "AFTERLIFE" /etc/issue.net 2>/dev/null; then 
+        print_check "PASS" "ssh banner"
+    else 
+        print_check "WARN" "ssh banner not standard"
+    fi
     
     echo ""
-    read -p "  Press enter to continue..."
+    echo -e "${CYAN}══════════════════════════════════════════════${NC}"
+    echo -e "  Results: ${GREEN}$passed passed${NC}, ${YELLOW}$warnings warnings${NC}, ${RED}$failed failed${NC}"
+    echo -e "${CYAN}══════════════════════════════════════════════${NC}"
+    echo ""
+    
+    echo -e " Domain : ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC}"
+    if command -v xray &> /dev/null; then
+        echo -e " Xray   : $(xray version | head -n 1)"
+    fi
+    echo ""
+    
+    if [ "$failed" -eq 0 ]; then
+        echo -e " ${GREEN}All critical checks passed.${NC} ($warnings non-critical warnings)"
+    else
+        echo -e " ${RED}Warning: $failed critical checks failed.${NC} Please review the logs."
+    fi
+    
+    echo ""
+    read -p "  Press [Enter] to continue..."
 }
 
 # Main loop
