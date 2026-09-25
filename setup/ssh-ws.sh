@@ -1,23 +1,23 @@
 #!/bin/bash
 
-DOMAIN=$1
-WS_PORT=${2:-443}
+# Default internal port for Nginx to proxy to (Matches install.sh)
+WS_PORT=${1:-8880}
 
 # Install dependencies
 apt install -y python3 python3-pip
 pip3 install websockets
 
-# Create WebSocket proxy script
+# Create WebSocket proxy script (Plain HTTP/WS, Nginx handles SSL on 443)
 cat > /usr/local/bin/ws-ssh.py <<EOF
 #!/usr/bin/env python3
 import asyncio
 import websockets
 import socket
-import ssl
 
 async def proxy(websocket, path):
     ssh_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ssh_socket.connect(('127.0.0.1', 22))
+    # Connect directly to Dropbear on port 109
+    ssh_socket.connect(('127.0.0.1', 109))
     
     async def ws_to_ssh():
         try:
@@ -41,11 +41,8 @@ async def proxy(websocket, path):
     await asyncio.gather(ws_to_ssh(), ssh_to_ws())
     ssh_socket.close()
 
-# SSL context
-ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-ssl_context.load_cert_chain('/etc/afterlifevpn/cert/fullchain.crt', '/etc/afterlifevpn/cert/private.key')
-
-start_server = websockets.serve(proxy, "0.0.0.0", $WS_PORT, ssl=ssl_context)
+# Start the internal plain-text WebSocket server
+start_server = websockets.serve(proxy, "127.0.0.1", $WS_PORT)
 asyncio.get_event_loop().run_until_complete(start_server)
 asyncio.get_event_loop().run_forever()
 EOF
@@ -71,7 +68,7 @@ EOF
 echo "$WS_PORT" > /usr/local/afterlifevpn/ws-port.conf
 
 systemctl daemon-reload
-systemctl start ws-ssh
+systemctl restart ws-ssh
 systemctl enable ws-ssh
 
-echo "SSH WebSocket installed on port $WS_PORT with SSL/TLS"
+echo "SSH WebSocket installed on internal port $WS_PORT pointing to Dropbear on 109"
