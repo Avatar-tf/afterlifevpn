@@ -1,79 +1,86 @@
 #!/bin/bash
 
-# Default internal port for Nginx to proxy to
 WS_PORT=${1:-8880}
 
-# Create the Raw TCP WebSocket-to-SSH Proxy
 cat > /usr/local/bin/ws-ssh.py <<EOF
-#!/usr/bin/env python3
+#!/usr/env/python3
 import socket
-import threading
 import select
+import sys
 
-LISTENING_PORT = int("$WS_PORT")
-DROPBEAR_PORT = 109
+LISTEN_IP = '127.0.0.1'
+LISTEN_PORT = int("$WS_PORT")
+BACKEND_PORT = 109
 
-def handle_client(client_socket):
-    try:
-        # Read the initial HTTP payload from NetMod/Cloudflare
-        request = client_socket.recv(8192).decode('utf-8', errors='ignore')
-        
-        # If it asks for a WebSocket upgrade, send the fake 101 acceptance
-        if "Upgrade: websocket" in request.lower() or "connection: upgrade" in request.lower():
-            response = (
-                "HTTP/1.1 101 Switching Protocols\r\n"
-                "Upgrade: websocket\r\n"
-                "Connection: Upgrade\r\n\r\n"
-            )
-            client_socket.send(response.encode('utf-8'))
-            
-        # Connect to the local Dropbear SSH server
-        ssh_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ssh_socket.connect(('127.0.0.1', DROPBEAR_PORT))
-        
-        # Blindly bridge the raw TCP traffic in both directions
-        sockets = [client_socket, ssh_socket]
-        while True:
-            read_sockets, _, error_sockets = select.select(sockets, [], sockets)
-            if error_sockets:
-                break
-            for sock in read_sockets:
-                data = sock.recv(8192)
-                if not data:
-                    return
-                if sock is client_socket:
-                    ssh_socket.sendall(data)
-                else:
-                    client_socket.sendall(data)
-                    
-    except Exception:
-        pass
-    finally:
-        client_socket.close()
-
-def main():
+def run_proxy():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('127.0.0.1', LISTENING_PORT))
-    server.listen(100)
-    print(f"Raw WebSocket Proxy listening on 127.0.0.1:{LISTENING_PORT} -> Dropbear:109")
+    server.bind((LISTEN_IP, LISTEN_PORT))
+    server.listen(500)
     
     while True:
-        client_socket, _ = server.accept()
-        client_thread = threading.Thread(target=handle_client, args=(client_socket,))
-        client_thread.daemon = True
-        client_thread.start()
+        client_sock, client_addr = server.accept()
+        try:
+            # Connect to Dropbear locally
+            backend_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            backend_sock.connect(('127.0.0.1', BACKEND_PORT))
+            
+            # Read initial client data (contains the WebSocket upgrade request)
+            client_sock.setblocking(False)
+            try:
+                initial_data = client_sock.recv(8192)
+            except BlockingIOError:
+                initial_data = b''
+                
+            if initial_data:
+                # If it's an HTTP/WS request, reply with 101 Switching Protocols back to client
+                if b'Upgrade: websocket' in initial_data or b'upgrade: websocket' in initial_data.lower():
+                    response = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+                    client_sock.sendall(response)
+                    # Strip headers if they were bundled with early payload, or pass remaining binary payload to Dropbear
+                    header_end = initial_data.find(b'\r\n\r\n')
+                    if header_end != -1:
+                        remainder = initial_data[header_end + 4:]
+                        if remainder:
+                            backend_sock.sendall(remainder)
+                else:
+                    # If raw payload, pass straight through
+                    backend_sock.sendall(initial_data)
+                    
+            client_sock.setblocking(True)
+            
+            # Bidirectional non-blocking forwarding loop
+            sockets = [client_sock, backend_sock]
+            while True:
+                r, w, e = select.select(sockets, [], sockets, 300)
+                if e or not r:
+                    break
+                for s in r:
+                    data = s.recv(16384)
+                    if not data:
+                        raise Exception("Connection closed")
+                    if s is client_sock:
+                        backend_sock.sendall(data)
+                    else:
+                        client_sock.sendall(data)
+        except Exception:
+            pass
+        finally:
+            client_sock.close()
+            try:
+                backend_sock.close()
+            except:
+                pass
 
 if __name__ == '__main__':
-    main()
+    run_proxy()
 EOF
 
 chmod +x /usr/local/bin/ws-ssh.py
 
-# Create systemd service
 cat > /etc/systemd/system/ws-ssh.service <<EOF
 [Unit]
-Description=SSH WebSocket Proxy (Raw TCP)
+Description=AFTERLIFE Secure WS-SSH Tunnel Proxy
 After=network.target
 
 [Service]
@@ -86,11 +93,6 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 EOF
 
-# Save port configuration
-echo "$WS_PORT" > /usr/local/afterlifevpn/ws-port.conf
-
 systemctl daemon-reload
 systemctl restart ws-ssh
 systemctl enable ws-ssh
-
-echo "Raw SSH WebSocket Proxy installed on internal port $WS_PORT pointing to Dropbear on 109"
