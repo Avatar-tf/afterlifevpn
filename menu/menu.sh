@@ -613,7 +613,7 @@ menu_hysteria() {
         case $sub_opt in
             1) bash /usr/local/afterlifevpn/setup/hysteria-user.sh ;;
             2) bash /usr/local/afterlifevpn/setup/hysteria.sh ;;
-            3) 
+            3)
                 clear
                 echo -e "\n  ${YELLOW}Hysteria Status:${NC}"
                 systemctl status hysteria --no-pager -l
@@ -909,34 +909,31 @@ list_backups() {
     read -p "  Press enter to continue..."
 }
 
+# ============================================================================
+# DOMAIN MANAGEMENT
+# ============================================================================
+run_add_host() {
+    if [ -f /usr/local/afterlifevpn/setup/add-host-ssh.sh ]; then
+        bash /usr/local/afterlifevpn/setup/add-host-ssh.sh
+    else
+        echo -e "  ${RED}Missing file:${NC} /usr/local/afterlifevpn/setup/add-host-ssh.sh"
+        echo "  Push setup/add-host-ssh.sh to GitHub, then run menu option U."
+        read -p "  Press enter..."
+    fi
+}
+
 menu_domain() {
     while true; do
         show_header "› Domain › Management"
         echo -e "  ${GREEN}1)${NC} Renew SSL Certificate"
-        echo -e "  ${GREEN}2)${NC} Add New Domain"
-        echo -e "  ${GREEN}3)${NC} List Domains"
-        echo -e "  ${GREEN}4)${NC} Set Primary Domain"
-        echo -e "  ${GREEN}5)${NC} Setup Nameserver (SlowDNS)"
-        echo -e "  ${GREEN}6)${NC} View Certificate / Nameserver Info"
+        echo -e "  ${GREEN}2)${NC} Multi-Domain / Nameserver Manager"
+        echo -e "  ${GREEN}3)${NC} View Certificate Info"
         echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " domain_option
         case $domain_option in
             1) renew_certificate ;;
-            2) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
-            3) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
-            4) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
-            5) bash /usr/local/afterlifevpn/setup/add-host-ssh.sh ;;
-            6) view_certificate
-               echo ""
-               if [ -f /usr/local/afterlifevpn/nameserver.conf ]; then
-                   echo -e "  ${WHITE}Nameserver file:${NC}"
-                   cat /usr/local/afterlifevpn/nameserver.conf
-               else
-                   echo -e "  ${YELLOW}No nameserver configured yet.${NC}"
-               fi
-               echo ""
-               read -p "  Press enter to continue..."
-               ;;
+            2) run_add_host ;;
+            3) view_certificate ;;
             0) break ;;
             *) ;;
         esac
@@ -945,11 +942,23 @@ menu_domain() {
 
 renew_certificate() {
     show_header "› Domain › Renew Certificate"
-    echo -e "  ${YELLOW}Renewing SSL certificate...${NC}"
+    if [ ! -f /usr/local/afterlifevpn/config.conf ]; then
+        echo -e "  ${RED}config.conf not found${NC}\n"
+        read -p "  Press enter to continue..."
+        return
+    fi
     source /usr/local/afterlifevpn/config.conf
+    if [ -z "$DOMAIN" ]; then
+        echo -e "  ${RED}DOMAIN is empty in config.conf${NC}\n"
+        read -p "  Press enter to continue..."
+        return
+    fi
+    echo -e "  ${YELLOW}Renewing SSL certificate for: $DOMAIN${NC}"
+    systemctl stop nginx 2>/dev/null
     ~/.acme.sh/acme.sh --renew -d "$DOMAIN" --force
+    systemctl start nginx 2>/dev/null
     systemctl restart ws-ssh xray hysteria nginx 2>/dev/null
-    echo -e "\n  ${GREEN}✓ Certificate renewed!${NC}\n"
+    echo -e "\n  ${GREEN}✓ Certificate renew command finished!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
@@ -959,6 +968,13 @@ view_certificate() {
         openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"
     else
         echo -e "  ${RED}No certificate found${NC}"
+    fi
+    echo ""
+    if [ -f /usr/local/afterlifevpn/nameserver.conf ]; then
+        echo -e "  ${WHITE}Nameserver:${NC}"
+        cat /usr/local/afterlifevpn/nameserver.conf
+    else
+        echo -e "  ${YELLOW}No nameserver configured yet.${NC}"
     fi
     echo ""
     read -p "  Press enter to continue..."
@@ -981,6 +997,7 @@ update_script() {
     wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
     wget -q -O /tmp/afterlife-update/hysteria.sh "$REPO_URL/setup/hysteria.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/ssh-ws.sh "$REPO_URL/setup/ssh-ws.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/add-host-ssh.sh "$REPO_URL/setup/add-host-ssh.sh" || SUCCESS=false
 
     wget -q -O /tmp/afterlife-update/xray-add-vless.sh "$REPO_URL/setup/xray-add-vless.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/xray-add-trojan.sh "$REPO_URL/setup/xray-add-trojan.sh" 2>/dev/null
@@ -995,6 +1012,7 @@ update_script() {
         cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
         cp /tmp/afterlife-update/hysteria.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/ssh-ws.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/add-host-ssh.sh /usr/local/afterlifevpn/setup/add-host-ssh.sh
 
         cp /tmp/afterlife-update/xray-add-vless.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/xray-add-trojan.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
@@ -1015,6 +1033,11 @@ update_script() {
         echo -e "  ${YELLOW}⚠ Type 'menu' or 'afterlife' to launch.${NC}"
     else
         echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or critical files are missing.${NC}"
+        echo -e "  ${YELLOW}Make sure these exist on GitHub:${NC}"
+        echo "  menu/menu.sh"
+        echo "  setup/add-host-ssh.sh"
+        echo "  setup/hysteria.sh"
+        echo "  setup/hysteria-user.sh"
     fi
 
     echo ""
@@ -1065,7 +1088,7 @@ full_diagnostics() {
     if command -v xray &> /dev/null; then print_check "PASS" "xray binary"; else print_check "FAIL" "xray binary missing"; fi
     if [ -d /etc/nginx/sites-enabled ]; then print_check "PASS" "nginx config"; else print_check "FAIL" "nginx config missing"; fi
     if [ -n "$DOMAIN" ]; then print_check "PASS" "domain set"; else print_check "WARN" "domain not configured"; fi
-    if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then 
+    if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then
         print_check "PASS" "TLS cert exists"
         if openssl x509 -checkend 86400 -noout -in /etc/afterlifevpn/cert/fullchain.crt &>/dev/null; then
             print_check "PASS" "TLS cert not expired"
@@ -1076,6 +1099,7 @@ full_diagnostics() {
         print_check "FAIL" "TLS cert missing"
     fi
     if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
+    if [ -f /usr/local/afterlifevpn/setup/add-host-ssh.sh ]; then print_check "PASS" "add-host-ssh script"; else print_check "FAIL" "add-host-ssh script missing"; fi
     echo ""
     echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
@@ -1095,7 +1119,6 @@ full_diagnostics() {
     check_port 8443 "reality"
     check_port 10010 "ss2022"
 
-    # Dynamic Hysteria port check
     HYST_PORT=443
     if [[ -f /usr/local/afterlifevpn/hysteria-config.txt ]]; then
         source /usr/local/afterlifevpn/hysteria-config.txt
