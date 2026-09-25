@@ -1,124 +1,142 @@
 #!/bin/bash
+# AFTERLIFE WS-SSH Installer (Fixed version)
+# Compatible with NetMod + nginx reverse proxy on 443
 
 WS_PORT=${1:-8880}
 
-cat > /usr/local/bin/ws-ssh.py <<EOF
+echo "[*] Installing WS-SSH Proxy on port $WS_PORT ..."
+
+# Create the improved Python proxy
+cat > /usr/local/bin/ws-ssh.py << 'EOF'
 #!/usr/bin/env python3
 import socket
 import select
 import threading
+import base64
+import hashlib
 import sys
 
-LISTEN_IP = '127.0.0.1'
-LISTEN_PORT = int("$WS_PORT")
-BACKEND_PORT = 109
+LISTEN_IP   = '127.0.0.1'          # localhost only (nginx will forward to it)
+LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8880
+BACKEND     = ('127.0.0.1', 109)
 
 def log(msg):
     print(f"[WS-SSH] {msg}", flush=True)
 
-def forward(source, destination, direction):
+def forward(src, dst):
     try:
         while True:
-            r, _, _ = select.select([source], [], [], 60)
-            if r:
-                data = source.recv(16384)
-                if not data:
-                    break
-                destination.sendall(data)
+            r, _, _ = select.select([src], [], [], 120)
+            if not r:
+                break
+            data = src.recv(16384)
+            if not data:
+                break
+            dst.sendall(data)
     except Exception:
         pass
     finally:
-        try:
-            source.close()
-        except:
-            pass
-        try:
-            destination.close()
-        except:
-            pass
+        for s in (src, dst):
+            try:
+                s.close()
+            except Exception:
+                pass
 
-def client_handler(client_socket, client_addr):
-    target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def make_accept(key: str) -> str:
+    magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    return base64.b64encode(hashlib.sha1(magic.encode()).digest()).decode()
+
+def client_handler(client, addr):
+    target = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        target_socket.connect(('127.0.0.1', BACKEND_PORT))
-        
-        # Read initial client payload (NetMod WebSocket request headers)
-        client_socket.settimeout(8)
-        try:
-            initial_data = client_socket.recv(16384)
-        except socket.timeout:
-            initial_data = b''
-        client_socket.settimeout(None)
-        
-        if initial_data:
-            req_str = initial_data.decode('utf-8', errors='ignore')
-            log(f"Received request from {client_addr}")
-            
-            # Accept any NetMod HTTP/WebSocket upgrade request
-            if 'upgrade' in req_str.lower() or 'websocket' in req_str.lower() or 'get /' in req_str.lower():
-                response = (
-                    "HTTP/1.1 101 Switching Protocols\r\n"
-                    "Upgrade: websocket\r\n"
-                    "Connection: Upgrade\r\n\r\n"
-                )
-                client_socket.sendall(response.encode('utf-8'))
-                
-                # Forward any trailing payload past the headers to Dropbear
-                header_end = initial_data.find(b'\r\n\r\n')
-                if header_end != -1:
-                    remainder = initial_data[header_end + 4:]
-                    if remainder:
-                        target_socket.sendall(remainder)
-            else:
-                target_socket.sendall(initial_data)
+        target.connect(BACKEND)
 
-        # Start bidirectional bridging threads
-        t1 = threading.Thread(target=forward, args=(client_socket, target_socket, "Client->Dropbear"))
-        t2 = threading.Thread(target=forward, args=(target_socket, client_socket, "Dropbear->Client"))
-        t1.daemon = True
-        t2.daemon = True
+        # Read the complete HTTP request (handles fragmented packets from mobile)
+        client.settimeout(10)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = client.recv(4096)
+            if not chunk:
+                return
+            data += chunk
+            if len(data) > 16384:
+                break
+        client.settimeout(None)
+
+        req = data.decode("utf-8", errors="ignore")
+        first_line = req.splitlines()[0] if req else "empty"
+        log(f"Client {addr} → {first_line}")
+
+        if "upgrade" in req.lower() and "websocket" in req.lower():
+            key = None
+            for line in req.splitlines():
+                if line.lower().startswith("sec-websocket-key:"):
+                    key = line.split(":", 1)[1].strip()
+                    break
+
+            headers = [
+                "HTTP/1.1 101 Switching Protocols",
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+            ]
+            if key:
+                headers.append(f"Sec-WebSocket-Accept: {make_accept(key)}")
+            headers.append("")
+            headers.append("")
+            client.sendall("\r\n".join(headers).encode())
+
+            # Forward any data that came after the headers
+            leftover = data.split(b"\r\n\r\n", 1)[1] if b"\r\n\r\n" in data else b""
+            if leftover:
+                target.sendall(leftover)
+        else:
+            # Not a WebSocket request – just pipe everything
+            target.sendall(data)
+
+        t1 = threading.Thread(target=forward, args=(client, target), daemon=True)
+        t2 = threading.Thread(target=forward, args=(target, client), daemon=True)
         t1.start()
         t2.start()
         t1.join()
         t2.join()
+
     except Exception as e:
-        log(f"Handler error: {e}")
+        log(f"Handler error from {addr}: {e}")
     finally:
-        try:
-            client_socket.close()
-        except:
-            pass
-        try:
-            target_socket.close()
-        except:
-            pass
+        for s in (client, target):
+            try:
+                s.close()
+            except Exception:
+                pass
 
 def main():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((LISTEN_IP, LISTEN_PORT))
-    server.listen(500)
-    log(f"WS-SSH Proxy listening on {LISTEN_IP}:{LISTEN_PORT} -> Dropbear:{BACKEND_PORT}")
-    
-    while True:
-        client_sock, client_addr = server.accept()
-        threading.Thread(target=client_handler, args=(client_sock, client_addr), daemon=True).start()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((LISTEN_IP, LISTEN_PORT))
+    srv.listen(200)
+    log(f"Listening on {LISTEN_IP}:{LISTEN_PORT} → Dropbear {BACKEND[1]}")
 
-if __name__ == '__main__':
+    while True:
+        client, addr = srv.accept()
+        threading.Thread(target=client_handler, args=(client, addr), daemon=True).start()
+
+if __name__ == "__main__":
     main()
 EOF
 
 chmod +x /usr/local/bin/ws-ssh.py
 
-cat > /etc/systemd/system/ws-ssh.service <<EOF
+# Create systemd service (port is passed as argument)
+cat > /etc/systemd/system/ws-ssh.service << EOF
 [Unit]
-Description=AFTERLIFE SSH WebSocket Proxy (NetMod Fix)
+Description=AFTERLIFE WS-SSH Proxy (NetMod)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -u /usr/local/bin/ws-ssh.py
+ExecStart=/usr/bin/python3 -u /usr/local/bin/ws-ssh.py ${WS_PORT}
 Restart=always
+RestartSec=3
 LimitNOFILE=65535
 
 [Install]
@@ -128,3 +146,8 @@ EOF
 systemctl daemon-reload
 systemctl restart ws-ssh
 systemctl enable ws-ssh
+
+echo
+echo "[+] WS-SSH Proxy installed and running on 127.0.0.1:${WS_PORT}"
+echo "[+] Make sure your nginx is proxying to http://127.0.0.1:${WS_PORT}"
+systemctl status ws-ssh --no-pager -l
