@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Enforce Root Privileges
 if [[ $EUID -ne 0 ]]; then
    echo -e "\033[0;31mError: This script must be run as root.\033[0m"
@@ -204,7 +203,7 @@ create_ssh_user() {
     get_system_info
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
     local EXPIRY_DATE=$(date -d "+$days days" +"%Y-%m-%d")
-    local WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
+    local WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "8880")
     
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -323,25 +322,69 @@ check_user_login() {
 
 change_dropbear_port() {
     show_header "› SSH › Change Dropbear Port"
-    local current_port=$(grep DROPBEAR_PORT /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 || echo "442")
-    local new_port
-    echo -e "  ${WHITE}Current port:${NC} $current_port\n"
-    read -p "  Enter new port: " new_port
     
-    new_port=${new_port:-$current_port}
-    if ! [[ "$new_port" =~ ^[0-9]+$ ]]; then echo -e "\n  ${RED}✗ Invalid port!${NC}\n"; read -p "  Press enter..."; return; fi
+    local current_port
+    current_port=$(grep -E "^DROPBEAR_PORT=" /etc/default/dropbear 2>/dev/null | cut -d'=' -f2 | tr -d '"' || echo "109")
     
-    sed -i "s/DROPBEAR_PORT=.*/DROPBEAR_PORT=$new_port/" /etc/default/dropbear
-    sed -i "s/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS=\"-p $new_port\"/" /etc/default/dropbear
+    echo -e "  ${WHITE}Current Dropbear Port:${NC} ${GREEN}$current_port${NC}"
+    echo ""
+    read -p "  Enter new port (1024-65535): " new_port
+    
+    # Validation
+    if [[ -z "$new_port" ]]; then
+        echo -e "\n  ${YELLOW}No change made.${NC}"
+        read -p "  Press enter to continue..."
+        return
+    fi
+    
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [ "$new_port" -lt 1024 ] || [ "$new_port" -gt 65535 ]; then
+        echo -e "\n  ${RED}✗ Invalid port! Please use a number between 1024 and 65535.${NC}"
+        read -p "  Press enter to continue..."
+        return
+    fi
+    
+    if ss -tuln | grep -q ":$new_port "; then
+        echo -e "\n  ${RED}✗ Port $new_port is already in use!${NC}"
+        read -p "  Press enter to continue..."
+        return
+    fi
+    
+    # Update Dropbear configuration
+    sed -i "s/^DROPBEAR_PORT=.*/DROPBEAR_PORT=$new_port/" /etc/default/dropbear
+    sed -i "s/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS=\"-p $new_port\"/" /etc/default/dropbear
+    
+    # Make sure the lines exist
+    grep -q "^DROPBEAR_PORT=" /etc/default/dropbear || echo "DROPBEAR_PORT=$new_port" >> /etc/default/dropbear
+    grep -q "^DROPBEAR_EXTRA_ARGS=" /etc/default/dropbear || echo "DROPBEAR_EXTRA_ARGS=\"-p $new_port\"" >> /etc/default/dropbear
+    
+    # Update firewall
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+        ufw allow ${new_port}/tcp >/dev/null 2>&1
+        echo -e "  ${GREEN}✓ Firewall (ufw) updated${NC}"
+    else
+        iptables -I INPUT -p tcp --dport $new_port -j ACCEPT 2>/dev/null
+        netfilter-persistent save >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}✓ Firewall (iptables) updated${NC}"
+    fi
+    
+    # Restart Dropbear
     systemctl restart dropbear
+    sleep 1
     
-    echo -e "\n  ${GREEN}✓ Dropbear port changed to $new_port${NC}\n"
+    if systemctl is-active --quiet dropbear; then
+        echo -e "\n  ${GREEN}✓ Dropbear port successfully changed to $new_port${NC}"
+        echo -e "  ${WHITE}Old port:${NC} $current_port → ${WHITE}New port:${NC} $new_port"
+    else
+        echo -e "\n  ${RED}✗ Failed to restart Dropbear. Please check the service.${NC}"
+    fi
+    
+    echo ""
     read -p "  Press enter to continue..."
 }
 
 change_websocket_port() {
     show_header "› SSH › Change WebSocket Port"
-    local current_port=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "443")
+    local current_port=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo "8880")
     local new_port
     echo -e "  ${WHITE}Current port:${NC} $current_port\n"
     read -p "  Enter new port: " new_port
@@ -349,26 +392,24 @@ change_websocket_port() {
     new_port=${new_port:-$current_port}
     if ! [[ "$new_port" =~ ^[0-9]+$ ]]; then echo -e "\n  ${RED}✗ Invalid port!${NC}\n"; read -p "  Press enter..."; return; fi
     
-    sed -i "s/start_server = websockets.serve(proxy, \"0.0.0.0\", .*/start_server = websockets.serve(proxy, \"0.0.0.0\", $new_port, ssl=ssl_context)/" /usr/local/bin/ws-ssh.py
     echo "$new_port" > /usr/local/afterlifevpn/ws-port.conf
     systemctl restart ws-ssh
     
     echo -e "\n  ${GREEN}✓ WebSocket port changed to $new_port${NC}"
-    echo -e "  ${YELLOW}⚠ Update your firewall rules!${NC}\n"
+    echo -e "  ${YELLOW}⚠ Make sure nginx is proxying to the new port if needed.${NC}\n"
     read -p "  Press enter to continue..."
 }
 
 monitor_connections() {
     show_header "› SSH › Active Connections"
     echo -e "  ${YELLOW}SSH Connections:${NC}"
-    local ssh_count=$(netstat -tnp 2>/dev/null | grep ':22' | grep ESTABLISHED | wc -l)
+    local ssh_count=$(ss -tnp 2>/dev/null | grep ':22' | grep ESTAB | wc -l)
     echo -e "  Total: $ssh_count"
-    netstat -tnp 2>/dev/null | grep ':22' | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr | head -10
+    ss -tnp 2>/dev/null | grep ':22' | grep ESTAB | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr | head -10
     
     echo -e "\n  ${YELLOW}Dropbear Connections:${NC}"
-    local drop_count=$(netstat -tnp 2>/dev/null | grep dropbear | grep ESTABLISHED | wc -l)
+    local drop_count=$(ss -tnp 2>/dev/null | grep dropbear | grep ESTAB | wc -l)
     echo -e "  Total: $drop_count"
-    netstat -tnp 2>/dev/null | grep dropbear | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -nr | head -10
     
     echo -e "\n  ${YELLOW}Logged in Users:${NC}"
     who
@@ -404,7 +445,7 @@ EOF
 }
 
 # ============================================================================
-# XRAY MANAGEMENT (KUROVPN STYLE)
+# XRAY MANAGEMENT
 # ============================================================================
 menu_xray() {
     while true; do
@@ -413,7 +454,7 @@ menu_xray() {
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
         printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
-        echo -e "${CYAN}║ ${YELLOW}› Main › Xray${CYAN}                                          ║\n${NC}"
+        echo -e "${CYAN}║ ${YELLOW}› Main › Xray${CYAN}                                          ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
         echo -e ""
         echo -e " ${CYAN}╭────────────────────────────────────────────────────────╮${NC}"
@@ -553,7 +594,7 @@ list_vmess_users() {
 }
 
 # ============================================================================
-# HYSTERIA 2 MANAGEMENT (KUROVPN STYLE)
+# HYSTERIA 2 MANAGEMENT (Updated)
 # ============================================================================
 menu_hysteria() {
     while true; do
@@ -562,200 +603,36 @@ menu_hysteria() {
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
         printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                            ${YELLOW}%-17s${CYAN} ║\n${NC}" "$SERVER_HOST"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
-        echo -e "${CYAN}║ ${YELLOW}› Main › Hysteria 2${CYAN}                                    ║\n${NC}"
+        echo -e "${CYAN}║ ${YELLOW}› Main › Hysteria 2${CYAN}                                    ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
         echo -e ""
-        echo -e "    ${GREEN}1)${NC}  Create Account"
-        echo -e "    ${GREEN}2)${NC}  List Accounts"
-        echo -e "    ${GREEN}3)${NC}  Renew Account"
-        echo -e "    ${GREEN}4)${NC}  Delete Account"
-        echo -e "    ${GREEN}5)${NC}  Change Port Mode (Single/Hopping)"
-        echo -e "    ${GREEN}6)${NC}  Service Status"
+        echo -e "    ${GREEN}1)${NC}  Manage Users (Add / Delete / List / Links)"
+        echo -e "    ${GREEN}2)${NC}  Reinstall / Change Mode (Single / Port 53 + Salamander)"
+        echo -e "    ${GREEN}3)${NC}  Service Status"
+        echo -e "    ${GREEN}4)${NC}  Restart Hysteria"
         echo -e ""
         echo -e "  ${RED}X${NC} Back  · ${WHITE}$SERVER_HOST${NC}"
         echo -e ""
-        read -p "  Select [1-6]: " sub_opt
+        read -p "  Select [1-4]: " sub_opt
         case $sub_opt in
-            1) create_hysteria_user ;;
-            2) list_hysteria_users ;;
-            3) bash /usr/local/afterlifevpn/setup/hys-renew.sh ;;
-            4) delete_hysteria_user ;;
-            5) change_hysteria_mode ;;
-            6) clear; echo -e "\n  ${YELLOW}Hysteria Status:${NC}"; systemctl status hysteria-server.service --no-pager | grep -E "Active|Started"; echo ""; read -p "  Press [Enter] to return..." ;;
+            1) bash /usr/local/afterlifevpn/setup/hysteria-user.sh ;;
+            2) bash /usr/local/afterlifevpn/setup/hysteria.sh ;;
+            3) 
+                clear
+                echo -e "\n  ${YELLOW}Hysteria Status:${NC}"
+                systemctl status hysteria --no-pager -l
+                echo ""
+                read -p "  Press [Enter] to return..."
+                ;;
+            4)
+                systemctl restart hysteria
+                echo -e "\n  ${GREEN}✓ Hysteria restarted${NC}"
+                sleep 1.5
+                ;;
             X|x|0) break ;;
             *) continue ;;
         esac
     done
-}
-
-create_hysteria_user() {
-    show_header "› Hysteria › Create Account"
-    local username days
-    read -p "  Username: " username
-    if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
-    read -p "  Expiry (days): " days
-    
-    if grep -q "^$username|" /usr/local/afterlifevpn/users/hysteria_users.txt 2>/dev/null; then
-        echo -e "\n  ${RED}✗ User already exists!${NC}\n"
-        read -p "  Press enter to continue..."
-        return
-    fi
-    
-    local PASSWORD=$(bash /usr/local/afterlifevpn/setup/hysteria-user.sh add "$username" "$days")
-    get_system_info
-    local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
-    local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
-    local LISTEN_PORTS=$(grep "listen:" /etc/hysteria/config.yaml 2>/dev/null | awk '{print $2}' | sed 's/://')
-    local STANDARD_PORT HOPPING_PORTS LINK_STANDARD LINK_HOPPING
-    
-    if [[ "$LISTEN_PORTS" == *","* ]]; then
-        STANDARD_PORT=$(echo "$LISTEN_PORTS" | cut -d',' -f1)
-        HOPPING_PORTS="$LISTEN_PORTS"
-    else
-        STANDARD_PORT="$LISTEN_PORTS"
-        HOPPING_PORTS="N/A"
-    fi
-    
-    LINK_STANDARD="hy2://${username}:${PASSWORD}@${PUBLIC_IP}:${STANDARD_PORT}?insecure=1&sni=${SERVER_HOST}#${username}-Hy2"
-    if [[ "$HOPPING_PORTS" != "N/A" ]]; then
-        LINK_HOPPING="hy2://${username}:${PASSWORD}@${PUBLIC_IP}:${HOPPING_PORTS}?insecure=1&sni=${SERVER_HOST}#${username}-Hy2-Hop"
-    fi
-    
-    clear
-    echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC}                      ${WHITE}HYSTERIA 2 ACCOUNT CREATED${NC}                    ${CYAN}│${NC}"
-    echo -e "${CYAN}╰────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
-    echo -e " ${WHITE}Password${NC}     : ${GREEN}$PASSWORD${NC}"
-    echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
-    echo -e " ${WHITE}Server${NC}       : ${CYAN}$SERVER_HOST${NC}"
-    echo -e " ${WHITE}Protocol${NC}     : ${CYAN}UDP (QUIC)${NC}"
-    echo -e " ${WHITE}Active Ports${NC} : ${CYAN}$LISTEN_PORTS${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
-    echo -e " ⚡ ${WHITE}STANDARD LINK${NC}"
-    echo -e "   ${YELLOW}$LINK_STANDARD${NC}"
-    
-    if [[ "$HOPPING_PORTS" != "N/A" ]]; then
-        echo -e "   ${CYAN}══════════════════════════════${NC}"
-        echo -e " 🔀 ${WHITE}PORT-HOPPING LINK (harder to block)${NC}"
-        echo -e "   ${YELLOW}$LINK_HOPPING${NC}"
-    fi
-    
-    if command -v qrencode &> /dev/null; then
-        echo -e "\n ${WHITE}[QR CODE - Hysteria Standard Connection]${NC}"
-        qrencode -t ANSIUTF8 "$LINK_STANDARD"
-    fi
-    
-    echo -e "\n ${GREEN}✓ Hysteria 2 account created successfully!${NC}\n"
-    read -p "  Press enter to continue..."
-}
-
-delete_hysteria_user() {
-    show_header "› Hysteria › Delete Account"
-    local username
-    read -p "  Username to delete: " username
-    if [[ -z "$username" ]]; then return; fi
-    
-    if ! grep -q "^$username|" /usr/local/afterlifevpn/users/hysteria_users.txt 2>/dev/null; then
-        echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
-        read -p "  Press enter to continue..."
-        return
-    fi
-    
-    bash /usr/local/afterlifevpn/setup/hysteria-user.sh delete "$username"
-    echo -e "\n  ${GREEN}✓ User '$username' deleted successfully!${NC}\n"
-    read -p "  Press enter to continue..."
-}
-
-list_hysteria_users() {
-    show_header "› Hysteria › User List"
-    if [ ! -f /usr/local/afterlifevpn/users/hysteria_users.txt ]; then
-        echo -e "  ${YELLOW}No users found${NC}\n"
-        read -p "  Press enter to continue..."
-        return
-    fi
-    
-    echo -e "  ${WHITE}Username${NC}     ${WHITE}Password${NC}         ${WHITE}Created${NC}        ${WHITE}Expires${NC}"
-    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────${NC}"
-    while IFS='|' read -r user pass expiry created; do
-        printf "  %-12s %-16s %-14s %s\n" "$user" "$pass" "$created" "$expiry"
-    done < /usr/local/afterlifevpn/users/hysteria_users.txt
-    echo ""
-    read -p "  Press enter to continue..."
-}
-
-change_hysteria_mode() {
-    show_header "› Hysteria › Port Configuration"
-    local mode_choice single_port port_range inc_53 listen_ports
-    echo -e "  ${GREEN}1)${NC} Single Port Mode"
-    echo -e "  ${GREEN}2)${NC} Port Hopping Mode\n"
-    read -p "  Select mode: " mode_choice
-    
-    if [[ $mode_choice == "1" ]]; then
-        read -p "  Enter port (default 443): " single_port
-        single_port=${single_port:-443}
-        
-        cat > /etc/hysteria/config.yaml <<EOF
-listen: :$single_port
-
-tls:
-  cert: /etc/afterlifevpn/cert/fullchain.crt
-  key: /etc/afterlifevpn/cert/private.key
-
-auth:
-  type: command
-  command: /etc/hysteria/auth.sh
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://www.google.com
-    rewriteHost: true
-
-quic:
-  initStreamReceiveWindow: 16777216
-  maxStreamReceiveWindow: 16777216
-  initConnReceiveWindow: 33554432
-  maxConnReceiveWindow: 33554432
-EOF
-        systemctl restart hysteria
-        echo -e "\n  ${GREEN}✓ Hysteria set to single port: $single_port${NC}"
-        
-    elif [[ $mode_choice == "2" ]]; then
-        read -p "  Enter port range (e.g., 20000-40000): " port_range
-        read -p "  Include port 53? (y/n): " inc_53
-        
-        if [[ $inc_53 == "y" ]]; then listen_ports="53,$port_range"
-        else listen_ports="$port_range"; fi
-        
-        cat > /etc/hysteria/config.yaml <<EOF
-listen: :$listen_ports
-
-tls:
-  cert: /etc/afterlifevpn/cert/fullchain.crt
-  key: /etc/afterlifevpn/cert/private.key
-
-auth:
-  type: command
-  command: /etc/hysteria/auth.sh
-
-masquerade:
-  type: proxy
-  proxy:
-    url: https://www.google.com
-    rewriteHost: true
-
-quic:
-  initStreamReceiveWindow: 16777216
-  maxStreamReceiveWindow: 16777216
-  initConnReceiveWindow: 33554432
-  maxConnReceiveWindow: 33554432
-EOF
-        systemctl restart hysteria
-        echo -e "\n  ${GREEN}✓ Hysteria set to port hopping: $listen_ports${NC}"
-    fi
-    echo ""
-    read -p "  Press enter to continue..."
 }
 
 # ============================================================================
@@ -814,7 +691,7 @@ clear_logs() {
 
 view_logs() {
     show_header "› Settings › Service Logs"
-    echo -e "  ${GREEN}1)${NC} SSH WebSocket\n  ${GREEN}2)${NC} Xray (VMess)\n  ${GREEN}3)${NC} Hysteria 2\n  ${GREEN}4)${NC} Dropbear\n"
+    echo -e "  ${GREEN}1)${NC} SSH WebSocket\n  ${GREEN}2)${NC} Xray\n  ${GREEN}3)${NC} Hysteria 2\n  ${GREEN}4)${NC} Dropbear\n"
     read -p "  Select service: " log_choice
     clear
     case $log_choice in
@@ -830,15 +707,15 @@ view_logs() {
 restart_all_services() {
     show_header "› Settings › Restart Services"
     echo -e "  ${YELLOW}Restarting all services...${NC}"
-    systemctl restart ws-ssh xray hysteria udp-custom dropbear
+    systemctl restart ws-ssh xray hysteria dropbear nginx 2>/dev/null
     echo -e "\n  ${GREEN}✓ All services restarted!${NC}\n"
     read -p "  Press enter to continue..."
 }
 
 check_all_services() {
     show_header "› Settings › Service Status"
-    local services=("ws-ssh" "xray" "hysteria" "udp-custom" "dropbear")
-    local names=("SSH WebSocket" "Xray (VMess)" "Hysteria 2" "UDP Custom" "Dropbear")
+    local services=("ws-ssh" "xray" "hysteria" "dropbear" "nginx")
+    local names=("SSH WebSocket" "Xray" "Hysteria 2" "Dropbear" "Nginx")
     
     for i in "${!services[@]}"; do
         if systemctl is-active --quiet "${services[$i]}"; then
@@ -936,7 +813,7 @@ renew_certificate() {
     echo -e "  ${YELLOW}Renewing SSL certificate...${NC}"
     source /usr/local/afterlifevpn/config.conf
     ~/.acme.sh/acme.sh --renew -d "$DOMAIN" --force
-    systemctl restart ws-ssh xray hysteria
+    systemctl restart ws-ssh xray hysteria nginx 2>/dev/null
     echo -e "\n  ${GREEN}✓ Certificate renewed!${NC}\n"
     read -p "  Press enter to continue..."
 }
@@ -959,7 +836,6 @@ update_script() {
     local REPO_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
     local SUCCESS=true
     
-    # Create temporary directory for downloads
     mkdir -p /tmp/afterlife-update
     
     echo -e "  ${WHITE}Pulling menu system...${NC}"
@@ -968,9 +844,9 @@ update_script() {
     echo -e "  ${WHITE}Pulling setup & user scripts...${NC}"
     wget -q -O /tmp/afterlife-update/xray-user.sh "$REPO_URL/setup/xray-user.sh" || SUCCESS=false
     wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
-    wget -q -O /tmp/afterlife-update/add-ssh.sh "$REPO_URL/setup/add-ssh.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/hysteria.sh "$REPO_URL/setup/hysteria.sh" 2>/dev/null
+    wget -q -O /tmp/afterlife-update/ssh-ws.sh "$REPO_URL/setup/ssh-ws.sh" 2>/dev/null
     
-    # NEW: KUROVPN backend scripts
     wget -q -O /tmp/afterlife-update/xray-add-vless.sh "$REPO_URL/setup/xray-add-vless.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/xray-add-trojan.sh "$REPO_URL/setup/xray-add-trojan.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/xray-online.sh "$REPO_URL/setup/xray-online.sh" 2>/dev/null
@@ -979,12 +855,12 @@ update_script() {
     wget -q -O /tmp/afterlife-update/user-expire.sh "$REPO_URL/setup/user-expire.sh" 2>/dev/null
     
     if [ "$SUCCESS" = true ]; then
-        # Apply updates to the system directories
         cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh
         cp /tmp/afterlife-update/xray-user.sh /usr/local/afterlifevpn/setup/xray-user.sh
         cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
+        cp /tmp/afterlife-update/hysteria.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
+        cp /tmp/afterlife-update/ssh-ws.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         
-        # Copy the new KUROVPN scripts if they downloaded successfully
         cp /tmp/afterlife-update/xray-add-vless.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/xray-add-trojan.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/xray-online.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
@@ -992,26 +868,16 @@ update_script() {
         cp /tmp/afterlife-update/xray-del.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         cp /tmp/afterlife-update/user-expire.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
         
-        # Only copy SSH script if it exists in the repo
-        if [ -s /tmp/afterlife-update/add-ssh.sh ]; then
-            cp /tmp/afterlife-update/add-ssh.sh /usr/local/afterlifevpn/setup/add-ssh.sh
-            chmod +x /usr/local/afterlifevpn/setup/add-ssh.sh
-        fi
-        
-        # Set execution permissions globally for all setup scripts
         chmod +x /usr/local/afterlifevpn/menu/menu.sh
         chmod +x /usr/local/afterlifevpn/setup/*.sh
         
-        # Create global shortcuts
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
         
-        # Cleanup
         rm -rf /tmp/afterlife-update
         
         echo -e "\n  ${GREEN}✓ All AFTERLIFE scripts updated successfully!${NC}"
-        echo -e "  ${YELLOW}⚠ Global shortcuts activated: Type 'menu' or 'afterlife' to launch.${NC}"
-        echo -e "  ${YELLOW}⚠ Restart menu to apply changes.${NC}"
+        echo -e "  ${YELLOW}⚠ Type 'menu' or 'afterlife' to launch.${NC}"
     else
         echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or critical files are missing.${NC}"
     fi
@@ -1028,7 +894,6 @@ full_diagnostics() {
     local failed=0
     local warnings=0
     
-    # Helper function for printing checks
     print_check() {
         local status=$1
         local text=$2
@@ -1059,7 +924,6 @@ full_diagnostics() {
             print_check "FAIL" "$srv is stopped/missing"
         fi
     done
-
     echo ""
     echo -e " ${WHITE}[ Configuration ]${NC}"
     if [ -f /usr/local/etc/xray/config.json ]; then print_check "PASS" "xray config valid"; else print_check "FAIL" "xray config missing"; fi
@@ -1075,14 +939,12 @@ full_diagnostics() {
         fi
     else
         print_check "FAIL" "TLS cert missing"
-        print_check "FAIL" "TLS cert not expired"
     fi
     if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
-
     echo ""
     echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
-        if netstat -tuln 2>/dev/null | grep -q ":$1 "; then
+        if ss -tuln 2>/dev/null | grep -q ":$1 "; then
             print_check "PASS" "port $1 ($2)"
         else
             print_check "FAIL" "port $1 ($2)"
@@ -1097,18 +959,7 @@ full_diagnostics() {
     check_port 2048 "wg"
     check_port 8443 "reality"
     check_port 10010 "ss2022"
-    
-    if netstat -uln 2>/dev/null | grep -E -q ":(443) "; then
-        print_check "PASS" "port 443/udp (hysteria)"
-    else
-        print_check "FAIL" "port 443/udp (hysteria)"
-    fi
-    
-    if iptables-save 2>/dev/null | grep -q "dport 53"; then
-        print_check "PASS" "port 53/udp (hysteria red)"
-    else
-        print_check "FAIL" "port 53/udp (hysteria red)"
-    fi
+    check_port 36712 "hysteria"
     
     echo ""
     echo -e " ${WHITE}[ Management ]${NC}"
@@ -1119,12 +970,6 @@ full_diagnostics() {
             print_check "FAIL" "$cmd command missing"
         fi
     done
-    
-    if grep -q "AFTERLIFE" /etc/issue.net 2>/dev/null; then 
-        print_check "PASS" "ssh banner"
-    else 
-        print_check "WARN" "ssh banner not standard"
-    fi
     
     echo ""
     echo -e "${CYAN}══════════════════════════════════════════════${NC}"
