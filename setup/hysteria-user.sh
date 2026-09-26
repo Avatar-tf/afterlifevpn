@@ -1,31 +1,28 @@
 #!/bin/bash
 # AFTERLIFE - Hysteria 2 users
-# Password-only hy2 links  |  IP host + domain SNI  |  command auth (argv[2]=password)
-
+# Password-only hy2 links | IP host + domain SNI | command auth (argv[2]=password)
+# Adds &obfs=... only when Salamander is on in yaml
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
-
 USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
 DOMAIN_FILE="/usr/local/afterlifevpn/config.conf"
 HY_YAML="/etc/hysteria/config.yaml"
 AUTH_SH="/etc/hysteria/auth.sh"
-
 mkdir -p /usr/local/afterlifevpn/users /etc/hysteria
 touch "$USERS_FILE"
 chmod 644 "$USERS_FILE" 2>/dev/null || true
-
 DOMAIN=""
 PUBLIC_IP=""
 if [ -f "$DOMAIN_FILE" ]; then
     # shellcheck disable=SC1090
     source "$DOMAIN_FILE" 2>/dev/null || true
 fi
-
 PORT=53
+OBFS_PASSWORD=""
 if [ -f "$HY_YAML" ]; then
     yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML")
     yaml_listen=${yaml_listen#:}
@@ -33,17 +30,18 @@ if [ -f "$HY_YAML" ]; then
         ''|*[!0-9]*) ;;
         *) PORT="$yaml_listen" ;;
     esac
+    if grep -qE '^obfs:' "$HY_YAML"; then
+        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML")
+        OBFS_PASSWORD=${OBFS_PASSWORD//\"/}
+    fi
 fi
-
 HOST="${DOMAIN:-}"
 IP="${PUBLIC_IP:-}"
 [ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 ifconfig.me)
 [ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 icanhazip.com)
 [ -z "$HOST" ] && HOST="$IP"
 [ -z "$IP" ] && IP="$HOST"
-
 pause() { read -r -p "  Press Enter to continue..."; }
-
 write_auth() {
     python3 -c '
 from pathlib import Path
@@ -86,7 +84,6 @@ sys.exit(0)
 '
     chmod 755 "$AUTH_SH"
 }
-
 ensure_command_yaml() {
     python3 -c '
 from pathlib import Path
@@ -113,12 +110,18 @@ p.write_text("\n".join(out) + "\n")
 '
     systemctl restart hysteria >/dev/null 2>&1 || true
 }
-
+obfs_query() {
+    if [ -n "$OBFS_PASSWORD" ]; then
+        printf '&obfs=salamander&obfs-password=%s' "$OBFS_PASSWORD"
+    fi
+}
 generate_links() {
     local user="$1"
     local pass="$2"
     local exp="${3:-}"
     local hy_port="${PORT:-53}"
+    local extra
+    extra=$(obfs_query)
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🚀 ${WHITE}AFTERLIFE — HYSTERIA 2${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -127,15 +130,20 @@ generate_links() {
     echo -e " Password : ${GREEN}${pass}${NC}"
     echo -e " Port     : ${YELLOW}${hy_port}${NC} (UDP)"
     [ -n "$exp" ] && echo -e " Expires  : ${YELLOW}${exp}${NC}"
+    if [ -n "$OBFS_PASSWORD" ]; then
+        echo -e " Obfs     : ${YELLOW}salamander${NC}"
+        echo -e " Obfs pass: ${GREEN}${OBFS_PASSWORD}${NC}"
+    else
+        echo -e " Obfs     : ${GREEN}off${NC}"
+    fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}#${user}-Hy2"
+    echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${user}-Hy2"
     echo -e "${CYAN}══════════════════════════════${NC}"
     echo -e "🔀 ${WHITE}PORT-HOPPING LINK (harder to block)${NC}"
-    echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}#${user}-Hy2-Hop"
+    echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}${extra}#${user}-Hy2-Hop"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
-
 add_user() {
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -164,7 +172,6 @@ add_user() {
     generate_links "$username" "$password" "$expiry"
     pause
 }
-
 delete_user() {
     clear
     echo -e "${YELLOW}         DELETE USER${NC}"
@@ -185,7 +192,6 @@ delete_user() {
     fi
     pause
 }
-
 list_users() {
     clear
     echo -e "${YELLOW}         USER LIST${NC}"
@@ -206,7 +212,6 @@ list_users() {
     echo
     pause
 }
-
 show_user_link() {
     clear
     echo -e "${YELLOW}         SHOW LINK${NC}"
@@ -228,18 +233,15 @@ show_user_link() {
     generate_links "$username" "$(echo "$rec" | cut -d'|' -f2)" "$(echo "$rec" | cut -d'|' -f3)"
     pause
 }
-
 if [ ! -f "$HY_YAML" ]; then
     echo -e "${RED}Missing $HY_YAML${NC}"
     exit 1
 fi
-
 write_auth
 if ! grep -q '|qMBcPERq5JKxEl4ZDfOlDA==|' "$USERS_FILE"; then
     echo 'core|qMBcPERq5JKxEl4ZDfOlDA==|2027-12-31' >> "$USERS_FILE"
 fi
 ensure_command_yaml
-
 while true; do
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -249,6 +251,11 @@ while true; do
     echo -e "  Host : ${GREEN}${HOST}${NC}"
     echo -e "  IP   : ${GREEN}${IP}${NC}"
     echo -e "  Port : ${YELLOW}${PORT}${NC} UDP"
+    if [ -n "$OBFS_PASSWORD" ]; then
+        echo -e "  Obfs : ${YELLOW}salamander ON${NC}"
+    else
+        echo -e "  Obfs : ${GREEN}off${NC}"
+    fi
     echo
     echo -e "  ${GREEN}1)${NC} Add User"
     echo -e "  ${GREEN}2)${NC} Delete User"
