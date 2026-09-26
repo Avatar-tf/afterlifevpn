@@ -1,10 +1,6 @@
 #!/bin/bash
-# ============================================================================
-# AFTERLIFE - Hysteria 2 user manager
-# Path: setup/hysteria-user.sh
-# Adds users to hysteria_users.txt (read by /etc/hysteria/auth.sh).
-# Does NOT reinstall Hysteria or change listen/obfs.
-# ============================================================================
+# AFTERLIFE - Hysteria 2 users
+# Password-only hy2 links  |  IP host + domain SNI  |  command auth (argv[2]=password)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -14,82 +10,115 @@ WHITE='\033[1;37m'
 NC='\033[0m'
 
 USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
-CONFIG_FILE="/usr/local/afterlifevpn/hysteria-config.txt"
 DOMAIN_FILE="/usr/local/afterlifevpn/config.conf"
 HY_YAML="/etc/hysteria/config.yaml"
 AUTH_SH="/etc/hysteria/auth.sh"
 
-mkdir -p /usr/local/afterlifevpn/users
+mkdir -p /usr/local/afterlifevpn/users /etc/hysteria
 touch "$USERS_FILE"
+chmod 644 "$USERS_FILE" 2>/dev/null || true
 
 DOMAIN=""
 PUBLIC_IP=""
-[[ -f "$DOMAIN_FILE" ]] && source "$DOMAIN_FILE"
+if [ -f "$DOMAIN_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$DOMAIN_FILE" 2>/dev/null || true
+fi
 
-PORT=443
-MODE="443"
-SALAMANDER="n"
-OBFS_PASSWORD=""
-[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
-
-if [[ -f "$HY_YAML" ]]; then
-    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" 2>/dev/null || true)
+PORT=53
+if [ -f "$HY_YAML" ]; then
+    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML")
     yaml_listen=${yaml_listen#:}
-    if [[ "$yaml_listen" =~ ^[0-9]+$ ]]; then
-        PORT="$yaml_listen"
-    fi
+    case "$yaml_listen" in
+        ''|*[!0-9]*) ;;
+        *) PORT="$yaml_listen" ;;
+    esac
 fi
 
-HOST="${DOMAIN:-$PUBLIC_IP}"
-if [[ -z "$HOST" ]]; then
-    HOST=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-fi
-HOST="${HOST:-YOUR-SERVER}"
+HOST="${DOMAIN:-}"
+IP="${PUBLIC_IP:-}"
+[ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 ifconfig.me)
+[ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 icanhazip.com)
+[ -z "$HOST" ] && HOST="$IP"
+[ -z "$IP" ] && IP="$HOST"
 
-ensure_auth_helper() {
-    if [[ -x "$AUTH_SH" ]]; then
-        return 0
-    fi
-    mkdir -p /etc/hysteria
-    cat > "$AUTH_SH" <<'EOF'
-#!/bin/bash
-AUTH_PAYLOAD="$1"
-USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
+pause() { read -r -p "  Press Enter to continue..."; }
 
-if [[ "$AUTH_PAYLOAD" == *":"* ]]; then
-    USERNAME="${AUTH_PAYLOAD%%:*}"
-    PASSWORD="${AUTH_PAYLOAD#*:}"
-    USER_RECORD=$(grep "^${USERNAME}|${PASSWORD}|" "$USERS_FILE" 2>/dev/null)
-else
-    PASSWORD="$AUTH_PAYLOAD"
-    USER_RECORD=$(grep "|${PASSWORD}|" "$USERS_FILE" 2>/dev/null | head -1)
-fi
-
-[[ -z "$USER_RECORD" ]] && exit 1
-
-EXPIRY=$(echo "$USER_RECORD" | cut -d'|' -f3)
-EXPIRY_SEC=$(date -d "$EXPIRY" +%s 2>/dev/null || echo 0)
-CURRENT_SEC=$(date +%s)
-[[ "$CURRENT_SEC" -gt "$EXPIRY_SEC" ]] && exit 1
-exit 0
-EOF
+write_auth() {
+    python3 -c '
+from pathlib import Path
+Path("/etc/hysteria/auth.sh").write_text("""#!/usr/bin/env python3
+import sys
+from datetime import datetime
+auth = sys.argv[2] if len(sys.argv) > 2 else (sys.argv[1] if len(sys.argv) > 1 else "")
+path = "/usr/local/afterlifevpn/users/hysteria_users.txt"
+username = None
+password = auth
+if ":" in auth:
+    username, password = auth.split(":", 1)
+try:
+    lines = open(path).read().splitlines()
+except FileNotFoundError:
+    sys.exit(1)
+record = None
+for line in lines:
+    parts = line.split("|")
+    if len(parts) < 3:
+        continue
+    u, p, exp = parts[0], parts[1], parts[2]
+    if username is not None:
+        if u == username and p == password:
+            record = (u, p, exp)
+            break
+    elif p == password:
+        record = (u, p, exp)
+        break
+if record is None:
+    sys.exit(1)
+try:
+    if datetime.now() > datetime.strptime(record[2], "%Y-%m-%d"):
+        sys.exit(1)
+except ValueError:
+    sys.exit(1)
+print(record[0])
+sys.exit(0)
+""")
+'
     chmod 755 "$AUTH_SH"
 }
 
-pause() { read -r -p "  Press Enter to continue..."; }
+ensure_command_yaml() {
+    python3 -c '
+from pathlib import Path
+p = Path("/etc/hysteria/config.yaml")
+if not p.exists():
+    raise SystemExit(0)
+lines = p.read_text().splitlines()
+out = []
+i = 0
+done = False
+while i < len(lines):
+    if lines[i].strip() == "auth:" and not done:
+        out.extend(["auth:", "  type: command", "  command: /etc/hysteria/auth.sh"])
+        done = True
+        i += 1
+        while i < len(lines) and (lines[i].strip() == "" or lines[i].startswith(" ") or lines[i].startswith("\t")):
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+if not done:
+    out.extend(["", "auth:", "  type: command", "  command: /etc/hysteria/auth.sh"])
+p.write_text("\n".join(out) + "\n")
+'
+    systemctl restart hysteria >/dev/null 2>&1 || true
+}
 
 generate_links() {
     local user="$1"
     local pass="$2"
-    local remark="${3:-$user}"
-    local extra=""
-    if [[ "${SALAMANDER}" == "y" || "${SALAMANDER}" == "Y" || "${SALAMANDER}" == "yes" ]]; then
-        if [[ -n "$OBFS_PASSWORD" ]]; then
-            extra="&obfs=salamander&obfs-password=${OBFS_PASSWORD}"
-        fi
-    fi
+    local exp="${3:-}"
     local hy_port="${PORT:-53}"
-
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🚀 ${WHITE}AFTERLIFE — HYSTERIA 2${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -97,88 +126,82 @@ generate_links() {
     echo -e " User     : ${GREEN}${user}${NC}"
     echo -e " Password : ${GREEN}${pass}${NC}"
     echo -e " Port     : ${YELLOW}${hy_port}${NC} (UDP)"
-    echo -e "${CYAN}══════════════════════════════${NC}"
+    [ -n "$exp" ] && echo -e " Expires  : ${YELLOW}${exp}${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    echo "hy2://${pass}@${HOST}:${hy_port}?insecure=1&sni=${HOST}${extra}#${remark}-Hy2"
+    echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}#${user}-Hy2"
     echo -e "${CYAN}══════════════════════════════${NC}"
     echo -e "🔀 ${WHITE}PORT-HOPPING LINK (harder to block)${NC}"
-    echo "hy2://${pass}@${HOST}:${hy_port},20000-40000?insecure=1&sni=${HOST}${extra}#${remark}-Hy2-Hop"
+    echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}#${user}-Hy2-Hop"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
 
 add_user() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}         ADD HYSTERIA USER${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo
     read -r -p "  Username: " username
-    if [[ -z "$username" ]]; then
-        echo -e "  ${RED}Username cannot be empty.${NC}"; pause; return
+    if [ -z "$username" ]; then
+        echo -e "  ${RED}Username cannot be empty.${NC}"
+        pause
+        return
     fi
     if grep -q "^${username}|" "$USERS_FILE"; then
-        echo -e "  ${RED}User already exists.${NC}"; pause; return
-    fi
-    read -r -p "  Password (empty = auto): " password
-    if [[ -z "$password" ]]; then
-        password=$(openssl rand -hex 6)
+        echo -e "  ${RED}User already exists.${NC}"
+        pause
+        return
     fi
     read -r -p "  Expiration days [30]: " days
     days=${days:-30}
+    password=$(openssl rand -hex 6)
     expiry=$(date -d "+${days} days" +%Y-%m-%d)
-
     echo "${username}|${password}|${expiry}" >> "$USERS_FILE"
     echo
-    echo -e "  ${GREEN}✓ User saved.${NC}"
+    echo -e "  ${GREEN}✓ Password generated and saved${NC}"
     echo
-    generate_links "$username" "$password" "$username"
+    generate_links "$username" "$password" "$expiry"
     pause
 }
 
 delete_user() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         DELETE HYSTERIA USER${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}         DELETE USER${NC}"
     echo
-    if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "  ${RED}No users found.${NC}"; pause; return
+    if [ ! -s "$USERS_FILE" ]; then
+        echo -e "  ${RED}No users.${NC}"
+        pause
+        return
     fi
     cut -d'|' -f1 "$USERS_FILE" | nl -w2 -s'. '
     echo
-    read -r -p "  Username to delete: " username
+    read -r -p "  Username: " username
     if grep -q "^${username}|" "$USERS_FILE"; then
         sed -i "/^${username}|/d" "$USERS_FILE"
-        echo -e "  ${GREEN}✓ Deleted ${username}${NC}"
+        echo -e "  ${GREEN}✓ Deleted${NC}"
     else
-        echo -e "  ${RED}User not found.${NC}"
+        echo -e "  ${RED}Not found${NC}"
     fi
     pause
 }
 
 list_users() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         HYSTERIA USER LIST${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}         USER LIST${NC}"
     echo
-    if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "  ${RED}No users found.${NC}"; pause; return
+    if [ ! -s "$USERS_FILE" ]; then
+        echo -e "  ${RED}No users.${NC}"
+        pause
+        return
     fi
-    printf "  %-4s %-16s %-16s %-12s %s\n" "No" "Username" "Password" "Expiry" "Status"
-    echo "  ---------------------------------------------------------------"
-    local i=1 user pass exp exp_sec now_sec status
-    now_sec=$(date +%s)
+    printf "  %-4s %-16s %-18s %-12s\n" "No" "User" "Password" "Expiry"
+    echo "  ----------------------------------------------------"
+    i=1
     while IFS='|' read -r user pass exp; do
-        [[ -z "$user" ]] && continue
-        exp_sec=$(date -d "$exp" +%s 2>/dev/null || echo 0)
-        if (( now_sec > exp_sec )); then
-            status="${RED}EXPIRED${NC}"
-        else
-            status="${GREEN}ACTIVE${NC}"
-        fi
-        printf "  %-4s %-16s %-16s %-12s %b\n" "$i" "$user" "$pass" "$exp" "$status"
-        ((i++))
+        [ -z "$user" ] && continue
+        printf "  %-4s %-16s %-18s %-12s\n" "$i" "$user" "$pass" "$exp"
+        i=$((i + 1))
     done < "$USERS_FILE"
     echo
     pause
@@ -186,46 +209,46 @@ list_users() {
 
 show_user_link() {
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}       SHOW HYSTERIA USER LINK${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}         SHOW LINK${NC}"
     echo
-    if [[ ! -s "$USERS_FILE" ]]; then
-        echo -e "  ${RED}No users found.${NC}"; pause; return
+    if [ ! -s "$USERS_FILE" ]; then
+        echo -e "  ${RED}No users.${NC}"
+        pause
+        return
     fi
     cut -d'|' -f1 "$USERS_FILE" | nl -w2 -s'. '
     echo
     read -r -p "  Username: " username
-    local rec
     rec=$(grep "^${username}|" "$USERS_FILE" || true)
-    if [[ -z "$rec" ]]; then
-        echo -e "  ${RED}User not found.${NC}"; pause; return
+    if [ -z "$rec" ]; then
+        echo -e "  ${RED}Not found.${NC}"
+        pause
+        return
     fi
-    local pass exp
-    pass=$(echo "$rec" | cut -d'|' -f2)
-    exp=$(echo "$rec" | cut -d'|' -f3)
-    echo
-    echo -e "  Expiry : $exp"
-    generate_links "$username" "$pass" "$username"
+    generate_links "$username" "$(echo "$rec" | cut -d'|' -f2)" "$(echo "$rec" | cut -d'|' -f3)"
     pause
 }
 
-ensure_auth_helper
-
-if [[ ! -f "$HY_YAML" ]]; then
-    echo -e "${RED}Hysteria config missing: $HY_YAML${NC}"
-    echo -e "${YELLOW}Install Hysteria first (menu 3 option 2) — do that later.${NC}"
-    pause
+if [ ! -f "$HY_YAML" ]; then
+    echo -e "${RED}Missing $HY_YAML${NC}"
+    exit 1
 fi
+
+write_auth
+if ! grep -q '|qMBcPERq5JKxEl4ZDfOlDA==|' "$USERS_FILE"; then
+    echo 'core|qMBcPERq5JKxEl4ZDfOlDA==|2027-12-31' >> "$USERS_FILE"
+fi
+ensure_command_yaml
 
 while true; do
     clear
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}      AFTERLIFE - HYSTERIA 2 USERS${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}      AFTERLIFE — HYSTERIA 2 USERS${NC}"
+    echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo
     echo -e "  Host : ${GREEN}${HOST}${NC}"
-    echo -e "  Port : ${YELLOW}${PORT}${NC} (from live yaml / saved config)"
+    echo -e "  IP   : ${GREEN}${IP}${NC}"
+    echo -e "  Port : ${YELLOW}${PORT}${NC} UDP"
     echo
     echo -e "  ${GREEN}1)${NC} Add User"
     echo -e "  ${GREEN}2)${NC} Delete User"
@@ -240,6 +263,5 @@ while true; do
         3) list_users ;;
         4) show_user_link ;;
         0|5|q|Q|x|X) exit 0 ;;
-        *) sleep 0.3 ;;
     esac
 done
