@@ -1,66 +1,65 @@
 #!/bin/bash
-
+# VMess listens on 127.0.0.1:10001 only.
+# Nginx already owns public 443 and sends /vmess here.
+# SSH-WS stays on / -> 127.0.0.1:8880. Do not bind 443 or 53.
 DOMAIN=$1
+if [[ -z "$DOMAIN" && -f /usr/local/afterlifevpn/config.conf ]]; then
+    # shellcheck disable=SC1091
+    source /usr/local/afterlifevpn/config.conf
+fi
+[[ -z "$DOMAIN" ]] && { echo "Usage: bash vmess.sh your.domain"; exit 1; }
 
-echo -e "\e[1;33mInstalling Xray (VMess Multi-User Ready)...\e[0m"
-
-# Install required JSON parser and UUID tools for the menu system
+export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y jq uuid-runtime
-
-# Install Xray Core
+apt-get install -y jq uuid-runtime qrencode
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
-# Create necessary directories for the menu database
-mkdir -p /usr/local/afterlifevpn/users
+mkdir -p /usr/local/afterlifevpn/users /usr/local/etc/xray
+touch /usr/local/afterlifevpn/users/xray_users.txt
 
-# Create Xray config (Multi-User Foundation)
-cat > /usr/local/etc/xray/config.json <<EOF
-{
-  "inbounds": [
-    {
-      "port": 443,
-      "protocol": "vmess",
-      "settings": {
-        "clients": []
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/vmess"
-        },
-        "security": "tls",
-        "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "/etc/afterlifevpn/cert/fullchain.crt",
-              "keyFile": "/etc/afterlifevpn/cert/private.key"
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom"
-    }
-  ]
-}
-EOF
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path("/usr/local/etc/xray/config.json")
+if p.exists() and p.stat().st_size:
+    cfg = json.loads(p.read_text())
+else:
+    cfg = {"log": {"loglevel": "warning"}, "inbounds": [], "outbounds": [{"protocol": "freedom"}]}
+clients = []
+kept = []
+for ib in cfg.get("inbounds", []):
+    if ib.get("protocol") == "vmess":
+        clients = ib.get("settings", {}).get("clients", [])
+        continue
+    kept.append(ib)
+kept.insert(0, {
+    "listen": "127.0.0.1",
+    "port": 10001,
+    "protocol": "vmess",
+    "tag": "vmess-ws",
+    "settings": {"clients": clients},
+    "streamSettings": {"network": "ws", "wsSettings": {"path": "/vmess"}},
+})
+cfg["inbounds"] = kept
+cfg.setdefault("log", {"loglevel": "warning"})
+cfg.setdefault("outbounds", [{"protocol": "freedom"}])
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+PY
 
-# Save base config info for the menu
 cat > /usr/local/afterlifevpn/vmess-config.txt <<EOF
-VMess Core Configuration:
 Address: $DOMAIN
-Port: 443
-Network: WebSocket (ws)
+PublicPort: 443
 Path: /vmess
-TLS: Enabled
-Authentication: Multi-User (JSON Dynamic)
+Local: 127.0.0.1:10001
 EOF
 
-systemctl restart xray
 systemctl enable xray
-
-echo -e "\e[0;32m✓ Xray installed successfully. Base configuration ready for user injection.\e[0m"
+systemctl restart xray
+sleep 1
+if ss -tlnp | grep -q ':10001'; then
+    echo "VMess ready on 127.0.0.1:10001. Public 443 was not taken."
+else
+    echo "Xray did not bind 10001"
+    journalctl -u xray -n 20 --no-pager
+    exit 1
+fi
