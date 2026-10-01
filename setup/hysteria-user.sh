@@ -1,47 +1,80 @@
 #!/bin/bash
-# AFTERLIFE - Hysteria 2 users
-# Password-only hy2 links | IP host + domain SNI | command auth (argv[2]=password)
-# Adds &obfs=... only when Salamander is on in yaml
+# AFTERLIFE - Hysteria 2 User Management
+# Path: setup/hysteria-user.sh
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
+
+# Dependency check
+if ! command -v python3 >/dev/null 2>&1; then
+    echo -e "${RED}Error: Python 3 is required but not installed.${NC}"
+    exit 1
+fi
+
 USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
 DOMAIN_FILE="/usr/local/afterlifevpn/config.conf"
+PORT53_STATE="/usr/local/afterlifevpn/port53-mode.conf"
 HY_YAML="/etc/hysteria/config.yaml"
 AUTH_SH="/etc/hysteria/auth.sh"
+
 mkdir -p /usr/local/afterlifevpn/users /etc/hysteria
 touch "$USERS_FILE"
 chmod 644 "$USERS_FILE" 2>/dev/null || true
+
 DOMAIN=""
 PUBLIC_IP=""
 if [ -f "$DOMAIN_FILE" ]; then
     # shellcheck disable=SC1090
     source "$DOMAIN_FILE" 2>/dev/null || true
 fi
-PORT=53
+
+# Detect base YAML port and obfs
+PORT=443
 OBFS_PASSWORD=""
 if [ -f "$HY_YAML" ]; then
-    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML")
+    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d '"'\'' ')
     yaml_listen=${yaml_listen#:}
     case "$yaml_listen" in
         ''|*[!0-9]*) ;;
         *) PORT="$yaml_listen" ;;
     esac
     if grep -qE '^obfs:' "$HY_YAML"; then
-        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML")
-        OBFS_PASSWORD=${OBFS_PASSWORD//\"/}
+        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML" | tr -d '"'\'' ')
     fi
 fi
+
+# Dynamic Port 53 Mux detection
+P53_MODE="none"
+if [ -f "$PORT53_STATE" ]; then
+    # shellcheck disable=SC1090
+    source "$PORT53_STATE" 2>/dev/null || true
+    P53_MODE=${MODE:-none}
+fi
+
+# Automatically match client link port to active Port 53 state
+case "$P53_MODE" in
+    shared_all)
+        PORT=53
+        OBFS_PASSWORD="" # Obfs is stripped for plain QUIC packet classification
+        ;;
+    shared_hy|hysteria)
+        PORT=53
+        ;;
+esac
+
 HOST="${DOMAIN:-}"
 IP="${PUBLIC_IP:-}"
 [ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 ifconfig.me)
 [ -z "$IP" ] && IP=$(curl -4 -s --max-time 5 icanhazip.com)
 [ -z "$HOST" ] && HOST="$IP"
 [ -z "$IP" ] && IP="$HOST"
+
 pause() { read -r -p "  Press Enter to continue..."; }
+
 write_auth() {
     python3 -c '
 from pathlib import Path
@@ -84,6 +117,7 @@ sys.exit(0)
 '
     chmod 755 "$AUTH_SH"
 }
+
 ensure_command_yaml() {
     python3 -c '
 from pathlib import Path
@@ -110,11 +144,13 @@ p.write_text("\n".join(out) + "\n")
 '
     systemctl restart hysteria >/dev/null 2>&1 || true
 }
+
 obfs_query() {
     if [ -n "$OBFS_PASSWORD" ]; then
         printf '&obfs=salamander&obfs-password=%s' "$OBFS_PASSWORD"
     fi
 }
+
 generate_links() {
     local user="$1"
     local pass="$2"
@@ -122,6 +158,7 @@ generate_links() {
     local hy_port="${PORT:-53}"
     local extra
     extra=$(obfs_query)
+    
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🚀 ${WHITE}AFTERLIFE — HYSTERIA 2${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -140,17 +177,19 @@ generate_links() {
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
     echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${user}-Hy2"
     echo -e "${CYAN}══════════════════════════════${NC}"
-    echo -e "🔀 ${WHITE}PORT-HOPPING LINK (harder to block)${NC}"
+    echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
     echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}${extra}#${user}-Hy2-Hop"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
+
 add_user() {
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}         ADD HYSTERIA USER${NC}"
+    echo -e "${YELLOW}          ADD HYSTERIA USER${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo
     read -r -p "  Username: " username
+    username=$(echo "$username" | tr -d '[:space:]')
     if [ -z "$username" ]; then
         echo -e "  ${RED}Username cannot be empty.${NC}"
         pause
@@ -172,32 +211,40 @@ add_user() {
     generate_links "$username" "$password" "$expiry"
     pause
 }
+
 delete_user() {
     clear
-    echo -e "${YELLOW}         DELETE USER${NC}"
+    echo -e "${YELLOW}          DELETE USER${NC}"
     echo
     if [ ! -s "$USERS_FILE" ]; then
-        echo -e "  ${RED}No users.${NC}"
+        echo -e "  ${RED}No users registered.${NC}"
         pause
         return
     fi
     cut -d'|' -f1 "$USERS_FILE" | nl -w2 -s'. '
     echo
-    read -r -p "  Username: " username
+    read -r -p "  Username to delete (or leave empty to cancel): " username
+    username=$(echo "$username" | tr -d '[:space:]')
+    if [ -z "$username" ]; then
+        echo -e "  ${YELLOW}Operation cancelled.${NC}"
+        pause
+        return
+    fi
     if grep -q "^${username}|" "$USERS_FILE"; then
         sed -i "/^${username}|/d" "$USERS_FILE"
-        echo -e "  ${GREEN}✓ Deleted${NC}"
+        echo -e "  ${GREEN}✓ User '${username}' deleted successfully.${NC}"
     else
-        echo -e "  ${RED}Not found${NC}"
+        echo -e "  ${RED}User '${username}' not found.${NC}"
     fi
     pause
 }
+
 list_users() {
     clear
-    echo -e "${YELLOW}         USER LIST${NC}"
+    echo -e "${YELLOW}          USER LIST${NC}"
     echo
     if [ ! -s "$USERS_FILE" ]; then
-        echo -e "  ${RED}No users.${NC}"
+        echo -e "  ${RED}No users registered.${NC}"
         pause
         return
     fi
@@ -212,49 +259,57 @@ list_users() {
     echo
     pause
 }
+
 show_user_link() {
     clear
-    echo -e "${YELLOW}         SHOW LINK${NC}"
+    echo -e "${YELLOW}          SHOW LINK${NC}"
     echo
     if [ ! -s "$USERS_FILE" ]; then
-        echo -e "  ${RED}No users.${NC}"
+        echo -e "  ${RED}No users registered.${NC}"
         pause
         return
     fi
     cut -d'|' -f1 "$USERS_FILE" | nl -w2 -s'. '
     echo
-    read -r -p "  Username: " username
-    rec=$(grep "^${username}|" "$USERS_FILE" || true)
+    read -r -p "  Username (or leave empty to cancel): " username
+    username=$(echo "$username" | tr -d '[:space:]')
+    if [ -z "$username" ]; then
+        echo -e "  ${YELLOW}Operation cancelled.${NC}"
+        pause
+        return
+    fi
+    rec=$(grep "^${username}|" "$USERS_FILE" | head -n 1)
     if [ -z "$rec" ]; then
-        echo -e "  ${RED}Not found.${NC}"
+        echo -e "  ${RED}User '${username}' not found.${NC}"
         pause
         return
     fi
     generate_links "$username" "$(echo "$rec" | cut -d'|' -f2)" "$(echo "$rec" | cut -d'|' -f3)"
     pause
 }
+
 if [ ! -f "$HY_YAML" ]; then
     echo -e "${RED}Missing $HY_YAML${NC}"
     exit 1
 fi
+
 write_auth
-if ! grep -q '|qMBcPERq5JKxEl4ZDfOlDA==|' "$USERS_FILE"; then
-    echo 'core|qMBcPERq5JKxEl4ZDfOlDA==|2027-12-31' >> "$USERS_FILE"
-fi
 ensure_command_yaml
+
 while true; do
     clear
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "${YELLOW}      AFTERLIFE — HYSTERIA 2 USERS${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo
-    echo -e "  Host : ${GREEN}${HOST}${NC}"
-    echo -e "  IP   : ${GREEN}${IP}${NC}"
-    echo -e "  Port : ${YELLOW}${PORT}${NC} UDP"
+    echo -e "  Host     : ${GREEN}${HOST}${NC}"
+    echo -e "  IP       : ${GREEN}${IP}${NC}"
+    echo -e "  Port     : ${YELLOW}${PORT}${NC} UDP"
+    echo -e "  Mux Mode : ${CYAN}${P53_MODE}${NC}"
     if [ -n "$OBFS_PASSWORD" ]; then
-        echo -e "  Obfs : ${YELLOW}salamander ON${NC}"
+        echo -e "  Obfs     : ${YELLOW}salamander ON${NC}"
     else
-        echo -e "  Obfs : ${GREEN}off${NC}"
+        echo -e "  Obfs     : ${GREEN}off${NC}"
     fi
     echo
     echo -e "  ${GREEN}1)${NC} Add User"
