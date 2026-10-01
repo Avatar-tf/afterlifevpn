@@ -548,235 +548,368 @@ menu_hysteria() {
 }
 # ============================================================================
 # PORT 53 MULTIPLEXER (SlowDNS / Hysteria / UDP-Custom)
+#
+# One iptables chain (AFTERLIFE_MUX) sits in nat/PREROUTING for UDP/53 and
+# sorts each new flow by its first packet (conntrack carries the rest):
+#   1. query whose name ends in the tunnel NS host  -> dnstt     (5300)
+#   2. QUIC v1 Initial packet  (shared_all only)    -> Hysteria  (443)
+#   3. anything else                                -> Hysteria (shared_hy) or udp-custom (7300)
+# The chosen mode is saved in port53-mode.conf and re-applied at boot by
+# afterlife-p53.service, which runs:  menu.sh --restore-p53
 # ============================================================================
+P53_BASE=/usr/local/afterlifevpn
+P53_HY_CFG=/etc/hysteria/config.yaml
+P53_HY_TXT=$P53_BASE/hysteria-config.txt
+P53_STATE=$P53_BASE/port53-mode.conf
+P53_NS_FILE=$P53_BASE/nameserver.conf
+P53_CHAIN=AFTERLIFE_MUX
+P53_SLOWDNS_PORT=5300
+P53_UDPC_PORT=7300
+P53_HY_PORT=443
+P53_OBFS_TAG='#AFTERLIFE-OBFS# '
+P53_UNIT=/etc/systemd/system/afterlife-p53.service
+
+p53_kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | tr -d "\"'"; }
+
+p53_load_state() {
+    P53_MODE=$(p53_kv "$P53_STATE" MODE); P53_MODE=${P53_MODE:-none}
+    P53_NS=$(p53_kv "$P53_NS_FILE" NS_HOST)
+}
+
+p53_udp_listening() { ss -uln 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" {f=1} END{exit !f}'; }
+p53_yn() { if "$@" >/dev/null 2>&1; then echo -e "${GREEN}yes${NC}"; else echo -e "${RED}no${NC}"; fi; }
+p53_mod_loaded() { modprobe "$1" 2>/dev/null; lsmod 2>/dev/null | grep -q "^$1"; }
+
+# "ns1.example.com" -> "03 6e 73 31 07 65 78 61 6d 70 6c 65 03 63 6f 6d 00"
+# DNS packets carry length-prefixed labels, never dots, so a plain-text match on a hostname can never hit.
+p53_dns_hex() {
+    local host=${1%.} out="" label
+    host=${host,,}
+    local IFS='.'
+    local -a labels
+    read -ra labels <<< "$host"
+    for label in "${labels[@]}"; do
+        out+=$(printf '%02x' "${#label}")
+        out+=$(printf '%s' "$label" | od -An -tx1 | tr -d ' \n')
+    done
+    out+="00"
+    echo "$out" | sed 's/../& /g; s/ $//'
+}
+
+p53_hy_listen() { awk '/^listen:/ {print $2}' "$P53_HY_CFG" 2>/dev/null; }
+p53_hy_set_listen() { [[ -f $P53_HY_CFG ]] && sed -i "s/^listen: .*/listen: :$1/" "$P53_HY_CFG"; }
+p53_hy_obfs_now() { grep -q '^obfs:' "$P53_HY_CFG" 2>/dev/null; }
+
+# Comment out / restore only the "obfs:" block, tagged with a unique marker.
+p53_hy_obfs_off() {
+    [[ -f $P53_HY_CFG ]] && p53_hy_obfs_now || return 0
+    local tmp; tmp=$(mktemp)
+    awk -v tag="$P53_OBFS_TAG" '
+        /^obfs:/                 { inblk=1; print tag $0; next }
+        inblk && /^[^ \t#]/      { inblk=0 }
+        inblk && /^[ \t]+[^ \t]/ { print tag $0; next }
+        { print }
+    ' "$P53_HY_CFG" > "$tmp" && cat "$tmp" > "$P53_HY_CFG"
+    rm -f "$tmp"
+}
+p53_hy_obfs_on() {
+    [[ -f $P53_HY_CFG ]] || return 0
+    sed -i "s/^${P53_OBFS_TAG}//" "$P53_HY_CFG"
+    # legacy format from the previous toggle
+    sed -i 's/^#obfs:/obfs:/; s/^#  type: salamander/  type: salamander/; s/^#  salamander:/  salamander:/; s/^#    password:/    password:/' "$P53_HY_CFG"
+}
+
+p53_ensure_iptables() {
+    command -v iptables >/dev/null 2>&1 && return 0
+    echo -e "  ${YELLOW}[*] Installing iptables...${NC}"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables >/dev/null 2>&1
+    command -v iptables >/dev/null 2>&1 || { echo -e "  ${RED}[!] Could not install iptables.${NC}"; return 1; }
+}
+
+p53_mux_clear() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
+    iptables -t nat -F "$P53_CHAIN" 2>/dev/null
+    iptables -t nat -X "$P53_CHAIN" 2>/dev/null
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
+}
+
+# REDIRECT changes the destination port before the INPUT filter, so the target ports must be allowed.
+p53_fw_open() {
+    local p
+    for p in "$@"; do
+        if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+            ufw allow "${p}/udp" >/dev/null 2>&1
+        elif iptables -S INPUT 2>/dev/null | head -n1 | grep -q 'DROP'; then
+            iptables -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$p" -j ACCEPT
+        fi
+    done
+}
+
+p53_mux_apply() {
+    local mode=$1 hex
+    p53_mux_clear
+    [[ $mode == none || $mode == hysteria ]] && return 0
+    p53_ensure_iptables || return 1
+    modprobe xt_string 2>/dev/null; modprobe xt_u32 2>/dev/null
+
+    iptables -t nat -N "$P53_CHAIN" || return 1
+    iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
+
+    if [[ $mode == slowdns ]]; then
+        iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
+        p53_fw_open "$P53_SLOWDNS_PORT"
+        return 0
+    fi
+
+    hex=$(p53_dns_hex "$P53_NS")
+    iptables -t nat -A "$P53_CHAIN" -p udp -m string --algo bm --icase --hex-string "|$hex|" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null \
+      || iptables -t nat -A "$P53_CHAIN" -p udp -m string --algo bm --hex-string "|$hex|" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" \
+      || { p53_mux_clear; return 1; }
+
+    case $mode in
+        shared_hy)
+            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
+            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" ;;
+        shared_udp)
+            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_UDPC_PORT" ;;
+        shared_all)
+            iptables -t nat -A "$P53_CHAIN" -p udp \
+                -m u32 --u32 "0>>22&0x3C@8>>24&0xF0=0xC0 && 0>>22&0x3C@9=0x00000001" \
+                -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
+            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" "$P53_UDPC_PORT" ;;
+    esac
+}
+
+p53_install_unit() {
+    local tmp; tmp=$(mktemp)
+    cat > "$tmp" <<EOF
+[Unit]
+Description=AFTERLIFE UDP/53 multiplexer rules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash $P53_BASE/menu/menu.sh --restore-p53
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    if ! cmp -s "$tmp" "$P53_UNIT"; then
+        cp "$tmp" "$P53_UNIT"
+        systemctl daemon-reload
+    fi
+    rm -f "$tmp"
+    systemctl enable afterlife-p53.service >/dev/null 2>&1
+}
+
+# Called at boot by afterlife-p53.service (no UI)
+p53_restore() {
+    p53_load_state
+    case $P53_MODE in
+        slowdns|shared_hy|shared_udp|shared_all) p53_mux_apply "$P53_MODE" ;;
+        *) p53_mux_clear ;;
+    esac
+}
+
+# --- prerequisites: fix automatically where possible, otherwise explain exactly what is missing
+p53_need_ns() {
+    p53_load_state
+    [[ -x /usr/local/bin/dnstt-server && -n $P53_NS ]] && return 0
+    echo -e "  ${YELLOW}[!] SlowDNS (dnstt + tunnel nameserver) is not set up yet.${NC}"
+    if [[ -f $P53_BASE/setup/slowdns.sh ]]; then
+        read -rp "  Run the SlowDNS installer now? [Y/n]: " ans
+        if [[ ! $ans =~ ^[Nn] ]]; then
+            bash "$P53_BASE/setup/slowdns.sh"
+            p53_load_state
+        fi
+    else
+        echo -e "  ${RED}slowdns.sh is missing - run Update (U) from the main menu first.${NC}"
+    fi
+    [[ -x /usr/local/bin/dnstt-server && -n $P53_NS ]] && return 0
+    echo -e "  ${RED}[!] SlowDNS still not ready (dnstt-server / NS_HOST in nameserver.conf).${NC}"
+    return 1
+}
+p53_need_udpc() {
+    p53_udp_listening "$P53_UDPC_PORT" && return 0
+    echo -e "  ${RED}[!] udp-custom is not listening on UDP $P53_UDPC_PORT - start/install it first.${NC}"
+    return 1
+}
+p53_need_mod() {
+    p53_mod_loaded "$1" && return 0
+    echo -e "  ${RED}[!] Kernel module $1 is not available on this server (some VPS/OpenVZ kernels lack it).${NC}"
+    return 1
+}
+p53_need_hy() {
+    [[ -f $P53_HY_CFG ]] && return 0
+    echo -e "  ${RED}[!] Hysteria is not installed ($P53_HY_CFG missing) - use main menu option 3 first.${NC}"
+    return 1
+}
+
+p53_finish() {  # <mode> <hysteria PORT value> <obfs changed 0/1>
+    echo "MODE=$1" > "$P53_STATE"
+    echo "PORT=$2" > "$P53_HY_TXT"
+    p53_install_unit
+    systemctl is-active --quiet hysteria || \
+        echo -e "  ${RED}[!] Hysteria is not running - see: journalctl -u hysteria -n 30${NC}"
+    echo -e "  ${GREEN}✓ Mode $1 active.${NC}"
+    [[ $3 == 1 ]] && echo -e "  ${YELLOW}Hysteria obfs state changed - re-issue Hysteria links (Hysteria 2 > Manage Users).${NC}"
+}
+
+p53_set_mode() {
+    local mode=$1 was_obfs=0 changed=0 holder confirm
+    p53_load_state
+    p53_ensure_iptables || return 1
+    p53_hy_obfs_now && was_obfs=1
+
+    case $mode in
+        slowdns)
+            p53_need_hy && p53_need_ns || return 1
+            p53_mux_clear
+            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            systemctl restart hysteria dnstt
+            p53_mux_apply slowdns || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
+            [[ $was_obfs == 0 ]] && changed=1
+            p53_finish slowdns "$P53_HY_PORT" $changed
+            echo -e "    SlowDNS clients : UDP 53 -> dnstt"
+            echo -e "    Hysteria        : port $P53_HY_PORT (own port)" ;;
+        hysteria)
+            p53_need_hy || return 1
+            p53_mux_clear
+            systemctl stop dnstt 2>/dev/null
+            systemctl stop hysteria 2>/dev/null
+            holder=$(ss -ulnp 2>/dev/null | awk '$4 ~ /:53$/')
+            if [[ -n $holder ]]; then
+                echo -e "  ${RED}[!] Something else already owns UDP 53:${NC}\n$holder"
+                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+                    read -rp "  systemd-resolved is running. Disable its port-53 stub listener now? [Y/n]: " ans
+                    if [[ ! $ans =~ ^[Nn] ]]; then
+                        mkdir -p /etc/systemd/resolved.conf.d
+                        printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/afterlife.conf
+                        [[ -L /etc/resolv.conf ]] && ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+                        systemctl restart systemd-resolved
+                        sleep 1
+                        holder=$(ss -ulnp 2>/dev/null | awk '$4 ~ /:53$/')
+                    fi
+                fi
+            fi
+            if [[ -n $holder ]]; then
+                echo -e "  ${RED}[!] UDP 53 is still busy - aborting.${NC}"
+                p53_hy_set_listen "$P53_HY_PORT"; systemctl start hysteria
+                return 1
+            fi
+            p53_hy_obfs_on; p53_hy_set_listen 53
+            systemctl start hysteria
+            [[ $was_obfs == 0 ]] && changed=1
+            p53_finish hysteria 53 $changed
+            echo -e "    Hysteria        : UDP 53 (native), SlowDNS stopped" ;;
+        shared_hy|shared_udp)
+            p53_need_hy && p53_need_ns && p53_need_mod xt_string || return 1
+            [[ $mode == shared_udp ]] && { p53_need_udpc || return 1; }
+            p53_mux_clear
+            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            systemctl restart hysteria dnstt
+            p53_mux_apply "$mode" || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
+            [[ $was_obfs == 0 ]] && changed=1
+            p53_finish "$mode" "$P53_HY_PORT" $changed
+            echo -e "    SlowDNS clients : UDP 53 (query ends in $P53_NS) -> dnstt"
+            if [[ $mode == shared_hy ]]; then
+                echo -e "    Everything else : UDP 53 -> Hysteria ($P53_HY_PORT, obfs ON)"
+            else
+                echo -e "    Everything else : UDP 53 -> udp-custom ($P53_UDPC_PORT)"
+                echo -e "    Hysteria        : port $P53_HY_PORT (own port)"
+            fi ;;
+        shared_all)
+            p53_need_hy && p53_need_ns && p53_need_mod xt_string && p53_need_mod xt_u32 && p53_need_udpc || return 1
+            echo -e "\n  ${YELLOW}[!] Shared ALL DISABLES Hysteria's salamander obfs.${NC}"
+            echo -e "  - Existing Hysteria links stop working until re-issued."
+            echo -e "  - Hysteria becomes plain QUIC on the wire (DPI can see it)."
+            echo -e "  - Mode 4 (Shared UDP) keeps obfs and needs no re-issuing."
+            read -rp "  Type YES to continue: " confirm
+            [[ $confirm == YES ]] || { echo -e "  ${RED}Aborted.${NC}"; return 1; }
+            p53_mux_clear
+            p53_hy_obfs_off; p53_hy_set_listen "$P53_HY_PORT"
+            systemctl restart hysteria dnstt
+            p53_mux_apply shared_all || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
+            [[ $was_obfs == 1 ]] && changed=1
+            p53_finish shared_all "$P53_HY_PORT" $changed
+            echo -e "    SlowDNS clients : UDP 53 (query ends in $P53_NS) -> dnstt"
+            echo -e "    Hysteria clients: UDP 53 (QUIC v1 Initial) -> $P53_HY_PORT, obfs ${RED}OFF${NC}"
+            echo -e "    udp-custom      : UDP 53 (anything else) -> $P53_UDPC_PORT" ;;
+        reset)
+            p53_mux_clear
+            systemctl stop dnstt 2>/dev/null
+            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            [[ -f $P53_HY_CFG ]] && systemctl restart hysteria
+            [[ $was_obfs == 0 ]] && changed=1
+            p53_finish none "$P53_HY_PORT" $changed
+            echo -e "    UDP 53 is free; Hysteria on $P53_HY_PORT." ;;
+    esac
+}
+
+p53_verify() {
+    clear
+    echo -e "${YELLOW}--- $P53_CHAIN packet counters ---${NC}\n"
+    if iptables -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null; then
+        echo -e "\n  Counters tick only on the FIRST packet of each flow (conntrack handles the rest)."
+        echo -e "  Connect one client type at a time and watch which rule's 'pkts' climbs:"
+        echo -e "   rule 1 = SlowDNS, QUIC rule (mode 5) = Hysteria, last rule = udp-custom / Hysteria."
+    else
+        echo -e "  ${RED}MUX chain not active (mode none/hysteria, or rules were lost).${NC}"
+    fi
+    echo
+    read -rp "  Press enter to return..."
+}
+
 menu_port53() {
-    local HYSTERIA_CONF="/usr/local/afterlifevpn/hysteria-config.txt"
-    local PORT53_STATE="/usr/local/afterlifevpn/port53-mode.conf"
-    local NS_FILE="/usr/local/afterlifevpn/nameserver.conf"
-    local UDP_CUSTOM_PORT=7300
-    local HYSTERIA_PORT=443
-    local SLOWDNS_PORT=5300
-
-    # Helper: Clear all Port 53 iptables forwards cleanly
-    clear_p53_iptables() {
-        iptables -t nat -D PREROUTING -p udp --dport 53 -j AFTERLIFE_MUX 2>/dev/null || true
-        iptables -t nat -F AFTERLIFE_MUX 2>/dev/null || true
-        iptables -t nat -X AFTERLIFE_MUX 2>/dev/null || true
-        # Clean up legacy direct redirects if they exist
-        iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports $SLOWDNS_PORT 2>/dev/null || true
-    }
-
-    apply_mux_rules() {
-        local mode=$1
-        clear_p53_iptables
-        if [[ "$mode" == "none" ]]; then return; fi
-
-        iptables -t nat -N AFTERLIFE_MUX
-        iptables -t nat -A PREROUTING -p udp --dport 53 -j AFTERLIFE_MUX
-
-        # RULE 1: DNS Match -> SlowDNS (5300)
-        if [[ -n "$DOMAIN" ]]; then
-            iptables -t nat -A AFTERLIFE_MUX -p udp -m string --string "$DOMAIN" --algo bm -j REDIRECT --to-ports $SLOWDNS_PORT
-        fi
-
-        if [[ "$mode" == "shared_hy" ]]; then
-            iptables -t nat -A AFTERLIFE_MUX -p udp -j REDIRECT --to-ports $HYSTERIA_PORT
-        elif [[ "$mode" == "shared_udp" ]]; then
-            iptables -t nat -A AFTERLIFE_MUX -p udp -j REDIRECT --to-ports $UDP_CUSTOM_PORT
-        elif [[ "$mode" == "shared_all" ]]; then
-            # u32 checks if QUIC header 0x40 bit is set (Requires Obfs OFF)
-            iptables -t nat -A AFTERLIFE_MUX -p udp -m u32 --u32 "0>>22&0x3C@8>>24&0x40=0x40" -j REDIRECT --to-ports $HYSTERIA_PORT
-            iptables -t nat -A AFTERLIFE_MUX -p udp -j REDIRECT --to-ports $UDP_CUSTOM_PORT
-        fi
-    }
-
-    toggle_obfs() {
-        local state=$1
-        if [[ ! -f /etc/hysteria/config.yaml ]]; then return; fi
-        if [[ "$state" == "off" ]]; then
-            sed -i 's/^obfs:/#obfs:/g' /etc/hysteria/config.yaml
-            sed -i 's/^  type: salamander/#  type: salamander/g' /etc/hysteria/config.yaml
-            sed -i 's/^  salamander:/#  salamander:/g' /etc/hysteria/config.yaml
-            sed -i 's/^    password:/#    password:/g' /etc/hysteria/config.yaml
-        else
-            sed -i 's/^#obfs:/obfs:/g' /etc/hysteria/config.yaml
-            sed -i 's/^#  type: salamander/  type: salamander/g' /etc/hysteria/config.yaml
-            sed -i 's/^#  salamander:/  salamander:/g' /etc/hysteria/config.yaml
-            sed -i 's/^#    password:/    password:/g' /etc/hysteria/config.yaml
-        fi
-        systemctl restart hysteria
-    }
-
+    local opt
     while true; do
-        # Fetch Status Indicators
-        modprobe xt_u32 2>/dev/null
-        local xt_u32_status="${RED}no${NC}"
-        if lsmod | grep -q "xt_u32"; then xt_u32_status="${GREEN}yes${NC}"; fi
-
-        local udp_custom_status="${RED}no${NC}"
-        if ss -tuln 2>/dev/null | grep -q ":$UDP_CUSTOM_PORT "; then udp_custom_status="${GREEN}yes${NC}"; fi
-
-        local dnstt_status="${RED}no${NC}"
-        if systemctl is-active --quiet dnstt 2>/dev/null; then dnstt_status="${GREEN}yes${NC}"; fi
-
-        local hysteria_obfs="${RED}no${NC}"
-        if grep -q "^obfs:" /etc/hysteria/config.yaml 2>/dev/null; then hysteria_obfs="${GREEN}yes${NC}"; fi
-
-        local hysteria_listen="unknown"
-        if [[ -f /etc/hysteria/config.yaml ]]; then
-            hysteria_listen=$(grep "^listen:" /etc/hysteria/config.yaml | awk '{print $2}')
-        fi
-
-        local CURRENT_PORT=443
-        if [[ -f "$HYSTERIA_CONF" ]]; then
-            source "$HYSTERIA_CONF"
-            CURRENT_PORT=${PORT:-443}
-        fi
-
-        local P53_MODE="none"
-        if [[ -f "$PORT53_STATE" ]]; then
-            source "$PORT53_STATE"
-            P53_MODE=${MODE:-none}
-        fi
-
-        local TUNNEL_NS="Not Configured"
-        if [[ -f "$NS_FILE" ]]; then
-            source "$NS_FILE"
-            TUNNEL_NS=${NS_HOST:-Not Configured}
-        fi
-
+        p53_load_state
+        modprobe xt_u32 2>/dev/null; modprobe xt_string 2>/dev/null
         clear
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "${DOMAIN:-$PUBLIC_IP}"
+        printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "${DOMAIN:-$(hostname)}"
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
         echo -e "${CYAN}║ ${YELLOW}› Main › Port 53 Toggle${CYAN}                                ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
         echo -e "\n  ${WHITE}--- PORT 53 MODE (SLOWDNS / HYSTERIA / UDP-CUSTOM) ---${NC}"
         echo -e "  Current mode : ${GREEN}${P53_MODE}${NC}"
-        echo -e "  Hysteria     : native ${YELLOW}${CURRENT_PORT}${NC} | yaml-mode: ${YELLOW}${hysteria_listen}${NC} | Obfs: ${hysteria_obfs}"
-        echo -e "  dnstt: ${dnstt_status}   xt_u32: ${xt_u32_status}   udp-custom: ${udp_custom_status}"
-        echo -e "  Tunnel NS    : ${YELLOW}${TUNNEL_NS}${NC}\n"
-
-        echo -e "  ${GREEN}1)${NC} SlowDNS only    ${CYAN}- UDP/53 -> dnstt :$SLOWDNS_PORT, Hysteria :443${NC}"
+        echo -e "  Tunnel NS    : ${YELLOW}${P53_NS:-Not Configured}${NC}"
+        echo -e "  Hysteria     : listen ${YELLOW}$(p53_hy_listen)${NC} | obfs: $(p53_yn p53_hy_obfs_now)"
+        echo -e "  dnstt: $(p53_yn systemctl is-active --quiet dnstt)   udp-custom: $(p53_yn p53_udp_listening $P53_UDPC_PORT)   xt_string: $(p53_yn p53_mod_loaded xt_string)   xt_u32: $(p53_yn p53_mod_loaded xt_u32)\n"
+        echo -e "  ${GREEN}1)${NC} SlowDNS only    ${CYAN}- UDP/53 -> dnstt, Hysteria on :$P53_HY_PORT${NC}"
         echo -e "  ${GREEN}2)${NC} Hysteria only   ${CYAN}- Hysteria binds :53, SlowDNS stopped${NC}"
-        echo -e "  ${GREEN}3)${NC} Shared HY       ${CYAN}- DNS -> dnstt, other UDP/53 -> Hysteria :443${NC}"
-        echo -e "  ${GREEN}4)${NC} Shared UDP      ${CYAN}- DNS -> dnstt, other UDP/53 -> udp-custom :$UDP_CUSTOM_PORT${NC}"
-        echo -e "  ${GREEN}5)${NC} Shared ALL      ${CYAN}- DNS / QUIC / other split  ${YELLOW}(obfs OFF)${NC}"
-        echo -e "  ${GREEN}6)${NC} Reset           ${CYAN}- drop mux, Hysteria back to :443${NC}"
+        echo -e "  ${GREEN}3)${NC} Shared HY       ${CYAN}- DNS -> dnstt, rest -> Hysteria (obfs ON)${NC}"
+        echo -e "  ${GREEN}4)${NC} Shared UDP      ${CYAN}- DNS -> dnstt, rest -> udp-custom :$P53_UDPC_PORT${NC}"
+        echo -e "  ${GREEN}5)${NC} Shared ALL      ${CYAN}- DNS / QUIC / rest split ${YELLOW}(obfs OFF)${NC}"
+        echo -e "  ${GREEN}6)${NC} Reset           ${CYAN}- drop mux, Hysteria back to :$P53_HY_PORT${NC}"
         echo -e "  ${GREEN}7)${NC} Install / Configure SlowDNS"
-        echo -e "  ${GREEN}8)${NC} Verify split    ${CYAN}- show AFTERLIFE_MUX counters${NC}\n"
-
-        echo -e "  ${CYAN}3/4/5 need dnstt. 4/5 need udp-custom. 5 needs xt_u32 and turns obfs OFF.${NC}"
+        echo -e "  ${GREEN}8)${NC} Verify split    ${CYAN}- show $P53_CHAIN counters${NC}\n"
+        echo -e "  ${CYAN}3/4/5 need SlowDNS. 4/5 need udp-custom. 5 needs xt_u32.${NC}"
         echo -e "  ${CYAN}Switching to 1/2/3/4/6 turns obfs back ON.${NC}\n"
-
         echo -e "  ${RED}0)${NC} Back\n"
-        read -p "  Select mode [0-8]: " p53_opt
-
-        case $p53_opt in
-            1)
-                echo -e "\n  ${YELLOW}[*] Enabling SlowDNS only...${NC}"
-                apply_mux_rules "none"
-                toggle_obfs "on"
-                systemctl stop hysteria 2>/dev/null
-                sed -i 's/^listen: .*/listen: :443/' /etc/hysteria/config.yaml 2>/dev/null
-                systemctl restart hysteria dnstt
-                
-                iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports $SLOWDNS_PORT
-                
-                echo "MODE=slowdns" > "$PORT53_STATE"
-                echo -e "  ${GREEN}Mode slowdns active.${NC}"
-                sleep 2
-                ;;
-            2)
-                echo -e "\n  ${YELLOW}[*] Enabling Hysteria only on port 53...${NC}"
-                apply_mux_rules "none"
-                toggle_obfs "on"
-                systemctl stop dnstt 2>/dev/null
-                sed -i 's/^listen: .*/listen: :53/' /etc/hysteria/config.yaml 2>/dev/null
-                systemctl restart hysteria
-                
-                echo "MODE=hysteria" > "$PORT53_STATE"
-                echo "PORT=53" > "$HYSTERIA_CONF"
-                echo -e "  ${GREEN}Mode hysteria active.${NC}"
-                sleep 2
-                ;;
-            3)
-                echo -e "\n  ${YELLOW}[*] Enabling shared_hy on port 53...${NC}"
-                toggle_obfs "on"
-                sed -i 's/^listen: .*/listen: :443/' /etc/hysteria/config.yaml 2>/dev/null
-                systemctl restart hysteria dnstt
-                apply_mux_rules "shared_hy"
-                
-                echo "MODE=shared_hy" > "$PORT53_STATE"
-                echo "PORT=443" > "$HYSTERIA_CONF"
-                echo -e "  ${GREEN}Mode shared_hy active.${NC}"
-                sleep 2
-                ;;
-            4)
-                echo -e "\n  ${YELLOW}[*] Enabling shared_udp on port 53...${NC}"
-                toggle_obfs "on"
-                sed -i 's/^listen: .*/listen: :443/' /etc/hysteria/config.yaml 2>/dev/null
-                systemctl restart hysteria dnstt
-                apply_mux_rules "shared_udp"
-                
-                echo "MODE=shared_udp" > "$PORT53_STATE"
-                echo -e "  ${GREEN}Mode shared_udp active.${NC}"
-                sleep 2
-                ;;
-            5)
-                if ! lsmod | grep -q "xt_u32"; then
-                    echo -e "\n  ${RED}[!] xt_u32 module is not loaded. Cannot use Shared ALL.${NC}"
-                    sleep 2; continue
-                fi
-                
-                echo -e "\n  ${YELLOW}[!] Shared ALL will DISABLE Hysteria's salamander obfs.${NC}"
-                read -p "  Type YES to disable obfs and continue: " confirm
-                if [[ "$confirm" == "YES" ]]; then
-                    echo -e "  ${YELLOW}[*] Enabling shared_all on port 53...${NC}"
-                    toggle_obfs "off"
-                    sed -i 's/^listen: .*/listen: :443/' /etc/hysteria/config.yaml 2>/dev/null
-                    systemctl restart hysteria dnstt
-                    apply_mux_rules "shared_all"
-                    
-                    echo "MODE=shared_all" > "$PORT53_STATE"
-                    echo "PORT=443" > "$HYSTERIA_CONF"
-                    echo -e "  ${GREEN}Mode shared_all active.${NC}"
-                else
-                    echo -e "  ${RED}Aborted.${NC}"
-                fi
-                sleep 2
-                ;;
-            6)
-                echo -e "\n  ${YELLOW}[*] Resetting to normal defaults (Hysteria on 443)...${NC}"
-                apply_mux_rules "none"
-                toggle_obfs "on"
-                systemctl stop dnstt 2>/dev/null
-                if [[ -f /etc/hysteria/config.yaml ]]; then
-                    sed -i 's/^listen: .*/listen: :443/' /etc/hysteria/config.yaml
-                    systemctl restart hysteria
-                    echo "MODE=none" > "$PORT53_STATE"
-                    echo "PORT=443" > "$HYSTERIA_CONF"
-                    echo -e "  ${GREEN}✓ Port 53 freed. Hysteria returned to port 443.${NC}"
-                fi
-                sleep 2
-                ;;
+        read -rp "  Select mode [0-8]: " opt
+        case $opt in
+            1) echo; p53_set_mode slowdns;    read -rp "  Press enter to continue..." ;;
+            2) echo; p53_set_mode hysteria;   read -rp "  Press enter to continue..." ;;
+            3) echo; p53_set_mode shared_hy;  read -rp "  Press enter to continue..." ;;
+            4) echo; p53_set_mode shared_udp; read -rp "  Press enter to continue..." ;;
+            5) echo; p53_set_mode shared_all; read -rp "  Press enter to continue..." ;;
+            6) echo; p53_set_mode reset;      read -rp "  Press enter to continue..." ;;
             7)
-                if [[ -f /usr/local/afterlifevpn/setup/slowdns.sh ]]; then
-                    bash /usr/local/afterlifevpn/setup/slowdns.sh
+                if [[ -f $P53_BASE/setup/slowdns.sh ]]; then
+                    bash "$P53_BASE/setup/slowdns.sh"
                 else
-                    echo -e "  ${RED}✗ slowdns.sh missing. Run main update (Option U) first.${NC}"
+                    echo -e "  ${RED}✗ slowdns.sh missing. Run Update (U) from the main menu first.${NC}"
                     sleep 2
-                fi
-                ;;
-            8)
-                clear
-                echo -e "${YELLOW}--- AFTERLIFE MUX Packet Counters ---${NC}\n"
-                iptables -t nat -L AFTERLIFE_MUX -v -n 2>/dev/null || echo -e "  ${RED}MUX chain not currently active.${NC}"
-                echo ""
-                read -p "  Press any key to return..." -n 1 -s
-                ;;
+                fi ;;
+            8) p53_verify ;;
             0) break ;;
-            *) continue ;;
+            *) ;;
         esac
     done
 }
@@ -847,6 +980,8 @@ restart_all_services() {
     show_header "› Settings › Restart Services"
     echo -e "  ${YELLOW}Restarting all services...${NC}"
     systemctl restart ws-ssh xray hysteria dropbear nginx 2>/dev/null
+    # nginx/hysteria restarts do not touch iptables, but re-assert the port 53 rules anyway
+    p53_restore 2>/dev/null
     echo -e "\n  ${GREEN}✓ All services restarted!${NC}\n"
     read -p "  Press enter to continue..."
 }
@@ -1004,7 +1139,9 @@ update_script() {
     wget -q -O /tmp/afterlife-update/user-expire.sh "$REPO_URL/setup/user-expire.sh" 2>/dev/null
     wget -q -O /tmp/afterlife-update/slowdns.sh "$REPO_URL/setup/slowdns.sh" 2>/dev/null
     if [ "$SUCCESS" = true ]; then
-        cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh
+        # copy to a new file then rename, so the running menu is not overwritten in place
+        cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh.new
+        mv -f /usr/local/afterlifevpn/menu/menu.sh.new /usr/local/afterlifevpn/menu/menu.sh
         cp /tmp/afterlife-update/xray-user.sh /usr/local/afterlifevpn/setup/xray-user.sh
         cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
         cp /tmp/afterlife-update/hysteria.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
@@ -1022,6 +1159,10 @@ update_script() {
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
         ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
         rm -rf /tmp/afterlife-update
+        # keep the port 53 boot service pointing at the new menu.sh
+        if [[ -f /usr/local/afterlifevpn/port53-mode.conf ]]; then
+            bash /usr/local/afterlifevpn/menu/menu.sh --install-p53-unit 2>/dev/null
+        fi
         echo -e "\n  ${GREEN}✓ All AFTERLIFE scripts updated successfully!${NC}"
         echo -e "  ${YELLOW}⚠ Type 'menu' or 'afterlife' to launch.${NC}"
     else
@@ -1090,6 +1231,15 @@ full_diagnostics() {
     if [ -f /usr/local/afterlifevpn/setup/add-host.sh ]; then print_check "PASS" "add-host script"; else print_check "FAIL" "add-host script missing"; fi
     if [ -x /usr/local/bin/dnstt-server ]; then print_check "PASS" "dnstt-server binary"; else print_check "WARN" "dnstt-server not installed"; fi
     if [ -f /usr/local/afterlifevpn/setup/slowdns.sh ]; then print_check "PASS" "slowdns script"; else print_check "WARN" "slowdns script missing"; fi
+    p53_load_state
+    if [[ $P53_MODE == shared_* || $P53_MODE == slowdns ]]; then
+        if iptables -t nat -L "$P53_CHAIN" -n &>/dev/null; then
+            print_check "PASS" "port 53 mux rules active (mode: $P53_MODE)"
+        else
+            print_check "FAIL" "port 53 mode is $P53_MODE but mux rules are missing (open option 11 and re-select it)"
+        fi
+        if systemctl is-enabled --quiet afterlife-p53.service 2>/dev/null; then print_check "PASS" "port 53 boot restore service"; else print_check "WARN" "port 53 boot restore service not enabled"; fi
+    fi
     echo ""
     echo -e " ${WHITE}[ Ports ]${NC}"
     check_port() {
@@ -1141,6 +1291,11 @@ full_diagnostics() {
     echo ""
     read -p "  Press [Enter] to continue..."
 }
+# Non-interactive entry points (used by systemd / update)
+case "$1" in
+    --restore-p53)      p53_restore; exit 0 ;;
+    --install-p53-unit) p53_install_unit; exit 0 ;;
+esac
 # Main loop
 while true; do
     show_dashboard
