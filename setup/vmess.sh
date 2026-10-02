@@ -1,6 +1,6 @@
 #!/bin/bash
 # VMess listens on 127.0.0.1:10001 only.
-# Nginx already owns public 443 and sends /vmess here.
+# Nginx owns public 443 and sends /vmess here.
 # SSH-WS stays on / -> 127.0.0.1:8880. Do not bind 443 or 53.
 DOMAIN=$1
 if [[ -z "$DOMAIN" && -f /usr/local/afterlifevpn/config.conf ]]; then
@@ -12,7 +12,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y jq uuid-runtime qrencode
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+command -v xray >/dev/null || bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
 mkdir -p /usr/local/afterlifevpn/users /usr/local/etc/xray
 touch /usr/local/afterlifevpn/users/xray_users.txt
@@ -44,7 +44,11 @@ cfg["inbounds"] = kept
 cfg.setdefault("log", {"loglevel": "warning"})
 cfg.setdefault("outbounds", [{"protocol": "freedom"}])
 p.write_text(json.dumps(cfg, indent=2) + "\n")
+print("config written, vmess clients:", len(clients))
 PY
+
+chmod 755 /usr/local/etc/xray
+chmod 644 /usr/local/etc/xray/config.json
 
 cat > /usr/local/afterlifevpn/vmess-config.txt <<EOF
 Address: $DOMAIN
