@@ -432,7 +432,16 @@ create_vmess_user() {
         read -p "  Press enter to continue..."
         return
     fi
-    local UUID=$(bash /usr/local/afterlifevpn/setup/xray-user.sh add "$username" "$days")
+    local XRAY_OUT UUID
+    XRAY_OUT=$(bash /usr/local/afterlifevpn/setup/xray-user.sh add "$username" "$days" 2>&1)
+    UUID=$(grep -oEi '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<< "$XRAY_OUT" | head -n 1)
+    if [[ -z "$UUID" ]]; then
+        echo -e "\n  ${RED}✗ Could not create the account. Output from xray-user.sh:${NC}\n"
+        echo "$XRAY_OUT"
+        echo ""
+        read -p "  Press enter to continue..."
+        return
+    fi
     get_system_info
     local SERVER_HOST="${DOMAIN:-$PUBLIC_IP}"
     local EXPIRY_DATE=$(date -d "+$days days" +"%b %d, %Y")
