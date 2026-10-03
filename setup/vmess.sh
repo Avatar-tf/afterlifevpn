@@ -1,13 +1,12 @@
 #!/bin/bash
 # VMess listens on 127.0.0.1:10001 only.
 # Nginx owns public 443 and sends /vmess here.
-# SSH-WS stays on / -> 127.0.0.1:8880. Do not bind 443 or 53.
 DOMAIN=$1
-if [[ -z "$DOMAIN" && -f /usr/local/afterlifevpn/config.conf ]]; then
+if [ -z "$DOMAIN" ] && [ -f /usr/local/afterlifevpn/config.conf ]; then
     # shellcheck disable=SC1091
     source /usr/local/afterlifevpn/config.conf
 fi
-[[ -z "$DOMAIN" ]] && { echo "Usage: bash vmess.sh your.domain"; exit 1; }
+[ -z "$DOMAIN" ] && { echo "Usage: bash vmess.sh your.domain"; exit 1; }
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
