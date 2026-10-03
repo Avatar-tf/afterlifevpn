@@ -482,7 +482,7 @@ delete_vmess_user() {
     local username
     read -p "  Username to delete: " username
     if [[ -z "$username" ]]; then return; fi
-    if ! grep -q "^$username|" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
+    if ! grep -qE "^${username}[:|]" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
         echo -e "\n  ${RED}✗ User does not exist!${NC}\n"
         read -p "  Press enter to continue..."
         return
@@ -499,7 +499,13 @@ list_vmess_users() {
     fi
     echo -e "  ${WHITE}Username${NC}     ${WHITE}UUID${NC}                                   ${WHITE}Expires${NC}"
     echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────${NC}"
-    while IFS='|' read -r user uuid expiry created; do
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        line=${line//|/:}
+        user=${line%%:*}
+        rest=${line#*:}
+        uuid=${rest%%:*}
+        expiry=${rest#*:}
         printf "  %-12s %-38s %s\n" "$user" "$uuid" "$expiry"
     done < /usr/local/afterlifevpn/users/xray_users.txt
     echo ""
