@@ -28,7 +28,7 @@ show_vmess_config() {
     local uuid="$2"
     local expiry="$3"
     local host="$DOMAIN"
-    if [[ -z "$host" ]]; then
+    if [ -z "$host" ]; then
         host=$(curl -4 -s --max-time 5 ifconfig.me)
     fi
     echo "Host/SNI : $host"
@@ -51,23 +51,23 @@ add_vmess_user() {
     local username="$1"
     local days="${2:-30}"
     local uuid expiry
-    if [[ -z "$username" ]]; then
+    if [ -z "$username" ]; then
         echo "Username required"
         return 1
     fi
-    if grep -q "^${username}:" "$USERS_FILE"; then
+    if grep -qE "^${username}[:|]" "$USERS_FILE"; then
         echo "User exists"
         return 1
     fi
-    if [[ ! -f "$XRAY_CONFIG" ]]; then
+    if [ ! -f "$XRAY_CONFIG" ]; then
         echo "Run vmess.sh first"
         return 1
     fi
     uuid=$(cat /proc/sys/kernel/random/uuid)
-    expiry=\( (date -d "+ \){days} days" +%Y-%m-%d)
+    expiry=$(date -d "+${days} days" +%Y-%m-%d)
     add_to_xray "$uuid" "$username" || { echo "Failed to edit config"; return 1; }
     systemctl restart xray
-    echo "\( {username}: \){uuid}:${expiry}" >> "$USERS_FILE"
+    echo "${username}:${uuid}:${expiry}" >> "$USERS_FILE"
     echo "User saved"
     show_vmess_config "$username" "$uuid" "$expiry"
 }
@@ -75,24 +75,26 @@ add_vmess_user() {
 delete_vmess_user() {
     local username="$1"
     local uuid
-    uuid=\( (grep "^ \){username}:" "$USERS_FILE" | cut -d: -f2)
-    if [[ -z "$uuid" ]]; then
+    uuid=$(grep -E "^${username}[:|]" "$USERS_FILE" | tr '|' ':' | cut -d: -f2)
+    if [ -z "$uuid" ]; then
         echo "Not found"
         return 1
     fi
     remove_from_xray "$uuid"
     systemctl restart xray
-    sed -i "/^${username}:/d" "$USERS_FILE"
+    sed -i -E "/^${username}[:|]/d" "$USERS_FILE"
     echo "Deleted $username"
 }
 
 list_vmess_users() {
-    if [[ ! -s "$USERS_FILE" ]]; then
+    if [ ! -s "$USERS_FILE" ]; then
         echo "No users"
         return
     fi
-    while IFS=: read -r u id exp; do
-        echo "$u  $exp  $id"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        line=${line//|/:}
+        echo "$line"
     done < "$USERS_FILE"
 }
 
@@ -101,9 +103,10 @@ case "$1" in
     delete) delete_vmess_user "$2" ;;
     list) list_vmess_users ;;
     show)
-        uuid=$(grep "^$2:" "$USERS_FILE" | cut -d: -f2)
-        exp=$(grep "^$2:" "$USERS_FILE" | cut -d: -f3)
-        if [[ -z "$uuid" ]]; then
+        rec=$(grep -E "^$2[:|]" "$USERS_FILE" | tr '|' ':' )
+        uuid=$(echo "$rec" | cut -d: -f2)
+        exp=$(echo "$rec" | cut -d: -f3)
+        if [ -z "$uuid" ]; then
             echo "Not found"
             exit 1
         fi
