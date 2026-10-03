@@ -427,7 +427,7 @@ create_vmess_user() {
     read -p "  Username: " username
     if [[ -z "$username" ]]; then echo -e "\n  ${RED}✗ Username cannot be empty!${NC}\n"; read -p "  Press enter..."; return; fi
     read -p "  Expiry (days): " days
-    if grep -q "^$username|" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
+    if grep -qE "^${username}[:|]" /usr/local/afterlifevpn/users/xray_users.txt 2>/dev/null; then
         echo -e "\n  ${RED}✗ User already exists!${NC}\n"
         read -p "  Press enter to continue..."
         return
