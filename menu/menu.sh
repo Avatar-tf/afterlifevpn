@@ -4,6 +4,15 @@ if [[ $EUID -ne 0 ]]; then
     echo -e "\033[0;31mError: This script must be run as root.\033[0m"
     exit 1
 fi
+# Exit instead of spinning when the terminal disappears (prompt read gets EOF/EIO)
+trap 'exit 0' HUP TERM
+read() {
+    builtin read "$@" && return 0
+    local rc=$? a
+    for a in "$@"; do [[ $a == -*p* ]] && exit 0; done
+    return $rc
+}
+export -f read
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
