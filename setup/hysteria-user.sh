@@ -1,6 +1,9 @@
 #!/bin/bash
 # AFTERLIFE - Hysteria 2 User Management
 # Path: setup/hysteria-user.sh
+# Unique login password per user.
+# Salamander is server-wide: read from yaml and stamped into every link.
+# Link port always matches yaml listen. Mux mode is extra :53 links only.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,7 +12,6 @@ CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-# Dependency check
 if ! command -v python3 >/dev/null 2>&1; then
     echo -e "${RED}Error: Python 3 is required but not installed.${NC}"
     exit 1
@@ -32,22 +34,22 @@ if [ -f "$DOMAIN_FILE" ]; then
     source "$DOMAIN_FILE" 2>/dev/null || true
 fi
 
-# Detect base YAML port and obfs
 PORT=443
 OBFS_PASSWORD=""
 if [ -f "$HY_YAML" ]; then
-    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d '"'\'' ')
+    yaml_listen=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML")
+    yaml_listen=$(echo "$yaml_listen" | tr -d "\"' ")
     yaml_listen=${yaml_listen#:}
     case "$yaml_listen" in
         ''|*[!0-9]*) ;;
         *) PORT="$yaml_listen" ;;
     esac
-    if grep -qE '^obfs:' "$HY_YAML"; then
-        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML" | tr -d '"'\'' ')
+    if grep -q 'type: salamander' "$HY_YAML"; then
+        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML")
+        OBFS_PASSWORD=$(echo "$OBFS_PASSWORD" | tr -d "\"' ")
     fi
 fi
 
-# Dynamic Port 53 Mux detection
 P53_MODE="none"
 if [ -f "$PORT53_STATE" ]; then
     # shellcheck disable=SC1090
@@ -55,14 +57,14 @@ if [ -f "$PORT53_STATE" ]; then
     P53_MODE=${MODE:-none}
 fi
 
-# Automatically match client link port to active Port 53 state
+# Do not change PORT/OBFS from mux state. Yaml is what the process actually speaks.
+# If mux is sending UDP/53 at this Hysteria, also print a :53 copy of the same link.
+PRINT_P53_COPY="n"
 case "$P53_MODE" in
-    shared_all)
-        PORT=53
-        OBFS_PASSWORD="" # Obfs is stripped for plain QUIC packet classification
-        ;;
-    shared_hy|hysteria)
-        PORT=53
+    shared_all|shared_hy|hysteria)
+        if [ "$PORT" != "53" ]; then
+            PRINT_P53_COPY="y"
+        fi
         ;;
 esac
 
@@ -76,7 +78,7 @@ IP="${PUBLIC_IP:-}"
 pause() { read -r -p "  Press Enter to continue..."; }
 
 write_auth() {
-    python3 -c '
+    python3 - << 'PY'
 from pathlib import Path
 Path("/etc/hysteria/auth.sh").write_text("""#!/usr/bin/env python3
 import sys
@@ -114,12 +116,12 @@ except ValueError:
 print(record[0])
 sys.exit(0)
 """)
-'
+PY
     chmod 755 "$AUTH_SH"
 }
 
 ensure_command_yaml() {
-    python3 -c '
+    python3 - << 'PY'
 from pathlib import Path
 p = Path("/etc/hysteria/config.yaml")
 if not p.exists():
@@ -141,8 +143,7 @@ while i < len(lines):
 if not done:
     out.extend(["", "auth:", "  type: command", "  command: /etc/hysteria/auth.sh"])
 p.write_text("\n".join(out) + "\n")
-'
-    systemctl restart hysteria >/dev/null 2>&1 || true
+PY
 }
 
 obfs_query() {
@@ -151,14 +152,25 @@ obfs_query() {
     fi
 }
 
+print_one_link() {
+    local pass="$1" hy_port="$2" tag="$3"
+    local extra
+    extra=$(obfs_query)
+    echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${tag}"
+}
+
+print_hop_link() {
+    local pass="$1" hy_port="$2" tag="$3"
+    local extra
+    extra=$(obfs_query)
+    echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}${extra}#${tag}"
+}
+
 generate_links() {
     local user="$1"
     local pass="$2"
     local exp="${3:-}"
-    local hy_port="${PORT:-53}"
-    local extra
-    extra=$(obfs_query)
-    
+    local hy_port="${PORT:-443}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🚀 ${WHITE}AFTERLIFE — HYSTERIA 2${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -168,17 +180,21 @@ generate_links() {
     echo -e " Port     : ${YELLOW}${hy_port}${NC} (UDP)"
     [ -n "$exp" ] && echo -e " Expires  : ${YELLOW}${exp}${NC}"
     if [ -n "$OBFS_PASSWORD" ]; then
-        echo -e " Obfs     : ${YELLOW}salamander${NC}"
-        echo -e " Obfs pass: ${GREEN}${OBFS_PASSWORD}${NC}"
+        echo -e " Obfs     : ${YELLOW}salamander (in the link)${NC}"
     else
         echo -e " Obfs     : ${GREEN}off${NC}"
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${user}-Hy2"
+    print_one_link "$pass" "$hy_port" "${user}-Hy2"
     echo -e "${CYAN}══════════════════════════════${NC}"
     echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
-    echo "hy2://${pass}@${IP}:${hy_port},20000-40000?insecure=1&sni=${HOST}${extra}#${user}-Hy2-Hop"
+    print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+    if [ "$PRINT_P53_COPY" = "y" ]; then
+        echo -e "${CYAN}══════════════════════════════${NC}"
+        echo -e "📡 ${WHITE}UDP/53 MUX COPY${NC}  (same obfs, mux forwards to :${hy_port})"
+        print_one_link "$pass" "53" "${user}-Hy2-53"
+    fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
 
