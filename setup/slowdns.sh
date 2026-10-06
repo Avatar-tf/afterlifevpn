@@ -253,7 +253,10 @@ echo ""
 read -r -p "  Confirm Tunnel Domain [$DEFAULT_TARGET]: " input_target
 TARGET_TUNNEL="${input_target:-$DEFAULT_TARGET}"
 
-printf 'NS_DOMAIN="%s"\n' "$TARGET_TUNNEL" > "$NS_FILE"
+{
+    printf 'NS_HOST="%s"\n' "$TARGET_TUNNEL"
+    printf 'NS_DOMAIN="%s"\n' "$TARGET_TUNNEL"
+} > "$NS_FILE"
 
 setup_service "$TARGET_TUNNEL"
 
