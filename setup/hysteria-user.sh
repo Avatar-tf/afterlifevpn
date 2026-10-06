@@ -58,15 +58,10 @@ if [ -f "$PORT53_STATE" ]; then
     P53_MODE=${MODE:-none}
 fi
 
-# Do not change PORT/OBFS from mux state. Yaml is what the process actually speaks.
-# If mux is sending UDP/53 at this Hysteria, also print a :53 copy of the same link.
-PRINT_P53_COPY="n"
+# Port clients dial: 53 whenever UDP/53 is routed to Hysteria (native or via mux), else the yaml port.
+LINK_PORT="$PORT"
 case "$P53_MODE" in
-    shared_all|shared_hy|hysteria)
-        if [ "$PORT" != "53" ]; then
-            PRINT_P53_COPY="y"
-        fi
-        ;;
+    shared_all|shared_hy|hysteria) LINK_PORT=53 ;;
 esac
 
 HOST="${DOMAIN:-}"
@@ -171,7 +166,7 @@ generate_links() {
     local user="$1"
     local pass="$2"
     local exp="${3:-}"
-    local hy_port="${PORT:-443}"
+    local hy_port="${LINK_PORT:-${PORT:-443}}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🚀 ${WHITE}AFTERLIFE — HYSTERIA 2${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
@@ -193,11 +188,6 @@ generate_links() {
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
         print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
-    fi
-    if [ "$PRINT_P53_COPY" = "y" ]; then
-        echo -e "${CYAN}══════════════════════════════${NC}"
-        echo -e "📡 ${WHITE}UDP/53 MUX COPY${NC}  (same obfs, mux forwards to :${hy_port})"
-        print_one_link "$pass" "53" "${user}-Hy2-53"
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
@@ -324,7 +314,7 @@ while true; do
     echo
     echo -e "  Host     : ${GREEN}${HOST}${NC}"
     echo -e "  IP       : ${GREEN}${IP}${NC}"
-    echo -e "  Port     : ${YELLOW}${PORT}${NC} UDP"
+    echo -e "  Port     : ${YELLOW}${LINK_PORT}${NC} UDP (Hysteria listens on ${PORT})"
     echo -e "  Mux Mode : ${CYAN}${P53_MODE}${NC}"
     if [ -n "$OBFS_PASSWORD" ]; then
         echo -e "  Obfs     : ${YELLOW}salamander ON${NC}"
