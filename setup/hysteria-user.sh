@@ -20,6 +20,7 @@ fi
 USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
 DOMAIN_FILE="/usr/local/afterlifevpn/config.conf"
 PORT53_STATE="/usr/local/afterlifevpn/port53-mode.conf"
+HOP_FLAG="/usr/local/afterlifevpn/port-hop.enabled"
 HY_YAML="/etc/hysteria/config.yaml"
 AUTH_SH="/etc/hysteria/auth.sh"
 
@@ -187,9 +188,12 @@ generate_links() {
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
     print_one_link "$pass" "$hy_port" "${user}-Hy2"
-    echo -e "${CYAN}══════════════════════════════${NC}"
-    echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
-    print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+    # Hopping needs the server-side AFTERLIFE_HOP rule: only shown when enabled in Shared HY.
+    if [ -f "$HOP_FLAG" ] && [ "$P53_MODE" = "shared_hy" ]; then
+        echo -e "${CYAN}══════════════════════════════${NC}"
+        echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
+        print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+    fi
     if [ "$PRINT_P53_COPY" = "y" ]; then
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "📡 ${WHITE}UDP/53 MUX COPY${NC}  (same obfs, mux forwards to :${hy_port})"
