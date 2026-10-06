@@ -668,10 +668,30 @@ p53_ensure_iptables() {
 
 p53_mux_clear() {
     command -v iptables >/dev/null 2>&1 || return 0
+    p53_hop_clear
     while iptables -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
     iptables -t nat -F "$P53_CHAIN" 2>/dev/null
     iptables -t nat -X "$P53_CHAIN" 2>/dev/null
     while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
+}
+
+# Optional Hysteria port hopping. Only applied in shared_hy, and only when $P53_HOP_FLAG exists.
+# 36712 (udp-custom) lies inside 20000-40000, so it is excluded.
+P53_HOP_FLAG=$P53_BASE/port-hop.enabled
+P53_HOP_CHAIN=AFTERLIFE_HOP
+p53_hop_clear() {
+    command -v iptables >/dev/null 2>&1 || return 0
+    while iptables -t nat -D PREROUTING -p udp -j "$P53_HOP_CHAIN" 2>/dev/null; do :; done
+    iptables -t nat -F "$P53_HOP_CHAIN" 2>/dev/null
+    iptables -t nat -X "$P53_HOP_CHAIN" 2>/dev/null
+}
+p53_hop_apply() {
+    p53_hop_clear
+    [[ -f $P53_HOP_FLAG ]] || return 0
+    iptables -t nat -N "$P53_HOP_CHAIN" || return 1
+    iptables -t nat -A "$P53_HOP_CHAIN" -p udp --dport 20000:36711 -j REDIRECT --to-ports "$P53_HY_PORT"
+    iptables -t nat -A "$P53_HOP_CHAIN" -p udp --dport 36713:40000 -j REDIRECT --to-ports "$P53_HY_PORT"
+    iptables -t nat -I PREROUTING 1 -p udp -m multiport --dports 20000:40000 -j "$P53_HOP_CHAIN" || { p53_hop_clear; return 1; }
 }
 
 # REDIRECT changes the destination port before the INPUT filter, so the target ports must be allowed.
@@ -710,7 +730,8 @@ p53_mux_apply() {
     case $mode in
         shared_hy)
             iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
-            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" ;;
+            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT"
+            p53_hop_apply ;;
         shared_udp)
             iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
             p53_fw_open "$P53_SLOWDNS_PORT" "$P53_UDPC_PORT" ;;
@@ -791,8 +812,12 @@ p53_need_hy() {
 }
 
 p53_finish() {  # <mode> <hysteria PORT value> <obfs changed 0/1>
+    local link=$2
+    case $1 in hysteria|shared_hy|shared_all) link=53 ;; esac
     echo "MODE=$1" > "$P53_STATE"
-    echo "PORT=$2" > "$P53_HY_TXT"
+    touch "$P53_HY_TXT"
+    sed -i '/^PORT=/d;/^LINK_PORT=/d' "$P53_HY_TXT"
+    printf 'PORT=%s\nLINK_PORT=%s\n' "$2" "$link" >> "$P53_HY_TXT"
     p53_install_unit
     systemctl is-active --quiet hysteria || \
         echo -e "  ${RED}[!] Hysteria is not running - see: journalctl -u hysteria -n 30${NC}"
