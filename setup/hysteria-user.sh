@@ -45,10 +45,6 @@ if [ -f "$HY_YAML" ]; then
         ''|*[!0-9]*) ;;
         *) PORT="$yaml_listen" ;;
     esac
-    if grep -q 'type: salamander' "$HY_YAML"; then
-        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML")
-        OBFS_PASSWORD=$(echo "$OBFS_PASSWORD" | tr -d "\"' ")
-    fi
 fi
 
 P53_MODE="none"
@@ -56,6 +52,14 @@ if [ -f "$PORT53_STATE" ]; then
     # shellcheck disable=SC1090
     source "$PORT53_STATE" 2>/dev/null || true
     P53_MODE=${MODE:-none}
+fi
+
+# If shared_all is active, force obfuscation off regardless of yaml settings
+if [ "$P53_MODE" != "shared_all" ] && [ -f "$HY_YAML" ]; then
+    if grep -q 'type: salamander' "$HY_YAML"; then
+        OBFS_PASSWORD=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$HY_YAML")
+        OBFS_PASSWORD=$(echo "$OBFS_PASSWORD" | tr -d "\"' ")
+    fi
 fi
 
 # Port clients dial: 53 whenever UDP/53 is routed to Hysteria (native or via mux), else the yaml port.
@@ -175,7 +179,9 @@ generate_links() {
     echo -e " Password : ${GREEN}${pass}${NC}"
     echo -e " Port     : ${YELLOW}${hy_port}${NC} (UDP)"
     [ -n "$exp" ] && echo -e " Expires  : ${YELLOW}${exp}${NC}"
-    if [ -n "$OBFS_PASSWORD" ]; then
+    if [ "$P53_MODE" = "shared_all" ]; then
+        echo -e " Obfs     : ${GREEN}off${NC}"
+    elif [ -n "$OBFS_PASSWORD" ]; then
         echo -e " Obfs     : ${YELLOW}salamander (in the link)${NC}"
     else
         echo -e " Obfs     : ${GREEN}off${NC}"
@@ -183,7 +189,6 @@ generate_links() {
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
     print_one_link "$pass" "$hy_port" "${user}-Hy2"
-    # Hopping needs the server-side AFTERLIFE_HOP rule: only shown when enabled in Shared HY.
     if [ -f "$HOP_FLAG" ] && [ "$P53_MODE" = "shared_hy" ]; then
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
@@ -316,7 +321,9 @@ while true; do
     echo -e "  IP       : ${GREEN}${IP}${NC}"
     echo -e "  Port     : ${YELLOW}${LINK_PORT}${NC} UDP (Hysteria listens on ${PORT})"
     echo -e "  Mux Mode : ${CYAN}${P53_MODE}${NC}"
-    if [ -n "$OBFS_PASSWORD" ]; then
+    if [ "$P53_MODE" = "shared_all" ]; then
+        echo -e "  Obfs     : ${GREEN}off${NC}"
+    elif [ -n "$OBFS_PASSWORD" ]; then
         echo -e "  Obfs     : ${YELLOW}salamander ON${NC}"
     else
         echo -e "  Obfs     : ${GREEN}off${NC}"
