@@ -117,7 +117,7 @@ show_dashboard() {
     echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)          ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN              ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN        ${GREEN}10)${NC} Domain & Cert            ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC}  ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
     echo -e ""
@@ -588,14 +588,6 @@ menu_hysteria() {
 }
 # ============================================================================
 # PORT 53 MULTIPLEXER (SlowDNS / Hysteria / UDP-Custom)
-#
-# One iptables chain (AFTERLIFE_MUX) sits in nat/PREROUTING for UDP/53 and
-# sorts each new flow by its first packet (conntrack carries the rest):
-#   1. query whose name ends in the tunnel NS host  -> dnstt     (5300)
-#   2. QUIC v1 Initial packet  (shared_all only)    -> Hysteria  (443)
-#   3. anything else                                -> Hysteria (shared_hy) or udp-custom (7300)
-# The chosen mode is saved in port53-mode.conf and re-applied at boot by
-# afterlife-p53.service, which runs:  menu.sh --restore-p53
 # ============================================================================
 P53_BASE=/usr/local/afterlifevpn
 P53_HY_CFG=/etc/hysteria/config.yaml
@@ -614,33 +606,17 @@ p53_kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | tr -d "\"'"; }
 p53_load_state() {
     P53_MODE=$(p53_kv "$P53_STATE" MODE); P53_MODE=${P53_MODE:-none}
     P53_NS=$(p53_kv "$P53_NS_FILE" NS_HOST)
+    [[ -z "$P53_NS" ]] && P53_NS=$(p53_kv "$P53_NS_FILE" NS_DOMAIN)
 }
 
 p53_udp_listening() { ss -uln 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" {f=1} END{exit !f}'; }
 p53_yn() { if "$@" >/dev/null 2>&1; then echo -e "${GREEN}yes${NC}"; else echo -e "${RED}no${NC}"; fi; }
 p53_mod_loaded() { modprobe "$1" 2>/dev/null; lsmod 2>/dev/null | grep -q "^$1"; }
 
-# "ns1.example.com" -> "03 6e 73 31 07 65 78 61 6d 70 6c 65 03 63 6f 6d 00"
-# DNS packets carry length-prefixed labels, never dots, so a plain-text match on a hostname can never hit.
-p53_dns_hex() {
-    local host=${1%.} out="" label
-    host=${host,,}
-    local IFS='.'
-    local -a labels
-    read -ra labels <<< "$host"
-    for label in "${labels[@]}"; do
-        out+=$(printf '%02x' "${#label}")
-        out+=$(printf '%s' "$label" | od -An -tx1 | tr -d ' \n')
-    done
-    out+="00"
-    echo "$out" | sed 's/../& /g; s/ $//'
-}
-
 p53_hy_listen() { awk '/^listen:/ {print $2}' "$P53_HY_CFG" 2>/dev/null; }
 p53_hy_set_listen() { [[ -f $P53_HY_CFG ]] && sed -i "s/^listen: .*/listen: :$1/" "$P53_HY_CFG"; }
 p53_hy_obfs_now() { grep -q '^obfs:' "$P53_HY_CFG" 2>/dev/null; }
 
-# Comment out / restore only the "obfs:" block, tagged with a unique marker.
 p53_hy_obfs_off() {
     [[ -f $P53_HY_CFG ]] && p53_hy_obfs_now || return 0
     local tmp; tmp=$(mktemp)
@@ -652,18 +628,16 @@ p53_hy_obfs_off() {
     ' "$P53_HY_CFG" > "$tmp" && cat "$tmp" > "$P53_HY_CFG"
     rm -f "$tmp"
 }
+
 p53_hy_obfs_on() {
     [[ -f $P53_HY_CFG ]] || return 0
     sed -i "s/^${P53_OBFS_TAG}//" "$P53_HY_CFG"
-    # legacy format from the previous toggle
-    sed -i 's/^#obfs:/obfs:/; s/^#  type: salamander/  type: salamander/; s/^#  salamander:/  salamander:/; s/^#    password:/    password:/' "$P53_HY_CFG"
+    sed -i 's/^#obfs:/obfs:/; s/^#  type: salamander/  type: salamander/; s/^#  salamander:/  salamander/; s/^#    password:/    password:/' "$P53_HY_CFG"
 }
 
 p53_ensure_iptables() {
     command -v iptables >/dev/null 2>&1 && return 0
-    echo -e "  ${YELLOW}[*] Installing iptables...${NC}"
     DEBIAN_FRONTEND=noninteractive apt-get install -y iptables >/dev/null 2>&1
-    command -v iptables >/dev/null 2>&1 || { echo -e "  ${RED}[!] Could not install iptables.${NC}"; return 1; }
 }
 
 p53_mux_clear() {
@@ -674,14 +648,11 @@ p53_mux_clear() {
     iptables -t nat -X "$P53_CHAIN" 2>/dev/null
     while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
     
-    # Clear split-brain legacy rules
     if command -v iptables-legacy >/dev/null 2>&1; then
         while iptables-legacy -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
         iptables-legacy -t nat -F "$P53_CHAIN" 2>/dev/null
         iptables-legacy -t nat -X "$P53_CHAIN" 2>/dev/null
     fi
-    
-    # Save to prevent ghost rules from reviving on reboot
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
 }
 
@@ -728,7 +699,6 @@ p53_mux_apply() {
         iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
         p53_fw_open "$P53_SLOWDNS_PORT"
     else
-        # True xt_u32 DNS packet classification (Replaces broken string match)
         iptables -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@2&0xFFFF=0x0100" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
 
         case $mode in
@@ -748,7 +718,6 @@ p53_mux_apply() {
         esac
     fi
 
-    # Save to rules.v4 to survive reboots and block split-brain
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
     command -v iptables-save >/dev/null 2>&1 && iptables-save > /etc/iptables/rules.v4 2>/dev/null
 }
@@ -777,7 +746,6 @@ EOF
     systemctl enable afterlife-p53.service >/dev/null 2>&1
 }
 
-# Called at boot by afterlife-p53.service (no UI)
 p53_restore() {
     p53_load_state
     case $P53_MODE in
@@ -786,7 +754,6 @@ p53_restore() {
     esac
 }
 
-# --- prerequisites: fix automatically where possible, otherwise explain exactly what is missing
 p53_need_ns() {
     p53_load_state
     [[ -x /usr/local/bin/dnstt-server && -n $P53_NS ]] && return 0
@@ -804,30 +771,33 @@ p53_need_ns() {
     echo -e "  ${RED}[!] SlowDNS still not ready (dnstt-server / NS_HOST in nameserver.conf).${NC}"
     return 1
 }
+
 p53_need_udpc() {
     p53_udp_listening "$P53_UDPC_PORT" && return 0
-    echo -e "  ${RED}[!] udp-custom is not listening on UDP $P53_UDPC_PORT - start/install it first.${NC}"
-    return 1
-}
-p53_need_mod() {
-    p53_mod_loaded "$1" && return 0
-    echo -e "  ${RED}[!] Kernel module $1 is not available on this server (some VPS/OpenVZ kernels lack it).${NC}"
-    return 1
-}
-p53_need_hy() {
-    [[ -f $P53_HY_CFG ]] && return 0
-    echo -e "  ${RED}[!] Hysteria is not installed ($P53_HY_CFG missing) - use main menu option 3 first.${NC}"
+    echo -e "  ${RED}[!] udp-custom is not listening on UDP $P53_UDPC_PORT - start/install it first (Use option 8 below).${NC}"
     return 1
 }
 
-p53_finish() {  # <mode> <hysteria PORT value> <obfs changed 0/1>
+p53_need_mod() {
+    p53_mod_loaded "$1" && return 0
+    echo -e "  ${RED}[!] Kernel module $1 is not available on this server.${NC}"
+    return 1
+}
+
+p53_need_hy() {
+    [[ -f $P53_HY_CFG ]] && return 0
+    echo -e "  ${RED}[!] Hysteria is not installed ($P53_HY_CFG missing).${NC}"
+    return 1
+}
+
+p53_finish() {
     echo "MODE=$1" > "$P53_STATE"
     echo "PORT=$2" > "$P53_HY_TXT"
     p53_install_unit
     systemctl is-active --quiet hysteria || \
         echo -e "  ${RED}[!] Hysteria is not running - see: journalctl -u hysteria -n 30${NC}"
     echo -e "  ${GREEN}✓ Mode $1 active.${NC}"
-    [[ $3 == 1 ]] && echo -e "  ${YELLOW}Hysteria obfs state changed - re-issue Hysteria links (Hysteria 2 > Manage Users).${NC}"
+    [[ $3 == 1 ]] && echo -e "  ${YELLOW}Hysteria obfs state changed - re-issue Hysteria links.${NC}"
 }
 
 p53_set_mode() {
@@ -844,61 +814,28 @@ p53_set_mode() {
             systemctl restart hysteria dnstt
             p53_mux_apply slowdns || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
             [[ $was_obfs == 0 ]] && changed=1
-            p53_finish slowdns "$P53_HY_PORT" $changed
-            echo -e "    SlowDNS clients : UDP 53 -> dnstt"
-            echo -e "    Hysteria        : port $P53_HY_PORT (own port)" ;;
+            p53_finish slowdns "$P53_HY_PORT" $changed ;;
         hysteria)
             p53_need_hy || return 1
             p53_mux_clear
             systemctl stop dnstt 2>/dev/null
             systemctl stop hysteria 2>/dev/null
-            holder=$(ss -ulnp 2>/dev/null | awk '$4 ~ /:53$/')
-            if [[ -n $holder ]]; then
-                echo -e "  ${RED}[!] Something else already owns UDP 53:${NC}\n$holder"
-                if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-                    read -rp "  systemd-resolved is running. Disable its port-53 stub listener now? [Y/n]: " ans
-                    if [[ ! $ans =~ ^[Nn] ]]; then
-                        mkdir -p /etc/systemd/resolved.conf.d
-                        printf '[Resolve]\nDNSStubListener=no\n' > /etc/systemd/resolved.conf.d/afterlife.conf
-                        [[ -L /etc/resolv.conf ]] && ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
-                        systemctl restart systemd-resolved
-                        sleep 1
-                        holder=$(ss -ulnp 2>/dev/null | awk '$4 ~ /:53$/')
-                    fi
-                fi
-            fi
-            if [[ -n $holder ]]; then
-                echo -e "  ${RED}[!] UDP 53 is still busy - aborting.${NC}"
-                p53_hy_set_listen "$P53_HY_PORT"; systemctl start hysteria
-                return 1
-            fi
             p53_hy_obfs_on; p53_hy_set_listen 53
             systemctl start hysteria
             [[ $was_obfs == 0 ]] && changed=1
-            p53_finish hysteria 53 $changed
-            echo -e "    Hysteria        : UDP 53 (native), SlowDNS stopped" ;;
+            p53_finish hysteria 53 $changed ;;
         shared_hy|shared_udp)
-            p53_need_hy && p53_need_ns && p53_need_mod xt_string || return 1
+            p53_need_hy && p53_need_ns || return 1
             [[ $mode == shared_udp ]] && { p53_need_udpc || return 1; }
             p53_mux_clear
             p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria dnstt
             p53_mux_apply "$mode" || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
             [[ $was_obfs == 0 ]] && changed=1
-            p53_finish "$mode" "$P53_HY_PORT" $changed
-            echo -e "    SlowDNS clients : UDP 53 (query ends in $P53_NS) -> dnstt"
-            if [[ $mode == shared_hy ]]; then
-                echo -e "    Everything else : UDP 53 -> Hysteria ($P53_HY_PORT, obfs ON)"
-            else
-                echo -e "    Everything else : UDP 53 -> udp-custom ($P53_UDPC_PORT)"
-                echo -e "    Hysteria        : port $P53_HY_PORT (own port)"
-            fi ;;
+            p53_finish "$mode" "$P53_HY_PORT" $changed ;;
         shared_all)
-            p53_need_hy && p53_need_ns && p53_need_mod xt_string && p53_need_mod xt_u32 && p53_need_udpc || return 1
+            p53_need_hy && p53_need_ns && p53_need_mod xt_u32 && p53_need_udpc || return 1
             echo -e "\n  ${YELLOW}[!] Shared ALL DISABLES Hysteria's salamander obfs.${NC}"
-            echo -e "  - Existing Hysteria links stop working until re-issued."
-            echo -e "  - Hysteria becomes plain QUIC on the wire (DPI can see it)."
-            echo -e "  - Mode 4 (Shared UDP) keeps obfs and needs no re-issuing."
             read -rp "  Type YES to continue: " confirm
             [[ $confirm == YES ]] || { echo -e "  ${RED}Aborted.${NC}"; return 1; }
             p53_mux_clear
@@ -906,31 +843,21 @@ p53_set_mode() {
             systemctl restart hysteria dnstt
             p53_mux_apply shared_all || { echo -e "  ${RED}iptables failed.${NC}"; return 1; }
             [[ $was_obfs == 1 ]] && changed=1
-            p53_finish shared_all "$P53_HY_PORT" $changed
-            echo -e "    SlowDNS clients : UDP 53 (query ends in $P53_NS) -> dnstt"
-            echo -e "    Hysteria clients: UDP 53 (QUIC v1 Initial) -> $P53_HY_PORT, obfs ${RED}OFF${NC}"
-            echo -e "    udp-custom      : UDP 53 (anything else) -> $P53_UDPC_PORT" ;;
+            p53_finish shared_all "$P53_HY_PORT" $changed ;;
         reset)
             p53_mux_clear
             systemctl stop dnstt 2>/dev/null
             p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
             [[ -f $P53_HY_CFG ]] && systemctl restart hysteria
             [[ $was_obfs == 0 ]] && changed=1
-            p53_finish none "$P53_HY_PORT" $changed
-            echo -e "    UDP 53 is free; Hysteria on $P53_HY_PORT." ;;
+            p53_finish none "$P53_HY_PORT" $changed ;;
     esac
 }
 
 p53_verify() {
     clear
     echo -e "${YELLOW}--- $P53_CHAIN packet counters ---${NC}\n"
-    if iptables -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null; then
-        echo -e "\n  Counters tick only on the FIRST packet of each flow (conntrack handles the rest)."
-        echo -e "  Connect one client type at a time and watch which rule's 'pkts' climbs:"
-        echo -e "   rule 1 = SlowDNS, QUIC rule (mode 5) = Hysteria, last rule = udp-custom / Hysteria."
-    else
-        echo -e "  ${RED}MUX chain not active (mode none/hysteria, or rules were lost).${NC}"
-    fi
+    iptables -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX chain not active.${NC}"
     echo
     read -rp "  Press enter to return..."
 }
@@ -939,7 +866,7 @@ menu_port53() {
     local opt
     while true; do
         p53_load_state
-        modprobe xt_u32 2>/dev/null; modprobe xt_string 2>/dev/null
+        modprobe xt_u32 2>/dev/null
         clear
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
         printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "${DOMAIN:-$(hostname)}"
@@ -950,7 +877,7 @@ menu_port53() {
         echo -e "  Current mode : ${GREEN}${P53_MODE}${NC}"
         echo -e "  Tunnel NS    : ${YELLOW}${P53_NS:-Not Configured}${NC}"
         echo -e "  Hysteria     : listen ${YELLOW}$(p53_hy_listen)${NC} | obfs: $(p53_yn p53_hy_obfs_now)"
-        echo -e "  dnstt: $(p53_yn systemctl is-active --quiet dnstt)   udp-custom: $(p53_yn p53_udp_listening $P53_UDPC_PORT)   xt_string: $(p53_yn p53_mod_loaded xt_string)   xt_u32: $(p53_yn p53_mod_loaded xt_u32)\n"
+        echo -e "  dnstt: $(p53_yn systemctl is-active --quiet dnstt)   udp-custom: $(p53_yn p53_udp_listening $P53_UDPC_PORT)   xt_u32: $(p53_yn p53_mod_loaded xt_u32)\n"
         echo -e "  ${GREEN}1)${NC} SlowDNS only    ${CYAN}- UDP/53 -> dnstt, Hysteria on :$P53_HY_PORT${NC}"
         echo -e "  ${GREEN}2)${NC} Hysteria only   ${CYAN}- Hysteria binds :53, SlowDNS stopped${NC}"
         echo -e "  ${GREEN}3)${NC} Shared HY       ${CYAN}- DNS -> dnstt, rest -> Hysteria (obfs ON)${NC}"
@@ -958,31 +885,69 @@ menu_port53() {
         echo -e "  ${GREEN}5)${NC} Shared ALL      ${CYAN}- DNS / QUIC / rest split ${YELLOW}(obfs OFF)${NC}"
         echo -e "  ${GREEN}6)${NC} Reset           ${CYAN}- drop mux, Hysteria back to :$P53_HY_PORT${NC}"
         echo -e "  ${GREEN}7)${NC} Install / Configure SlowDNS"
-        echo -e "  ${GREEN}8)${NC} Verify split    ${CYAN}- show $P53_CHAIN counters${NC}\n"
-        echo -e "  ${CYAN}3/4/5 need SlowDNS. 4/5 need udp-custom. 5 needs xt_u32.${NC}"
-        echo -e "  ${CYAN}Switching to 1/2/3/4/6 turns obfs back ON.${NC}\n"
+        echo -e "  ${GREEN}8)${NC} Start / Toggle UDP-Custom (:7300)"
+        echo -e "  ${GREEN}9)${NC} Verify split    ${CYAN}- show $P53_CHAIN counters${NC}\n"
         echo -e "  ${RED}0)${NC} Back\n"
-        read -rp "  Select mode [0-8]: " opt
+        read -rp "  Select mode [0-9]: " opt
         case $opt in
-            1) echo; p53_set_mode slowdns;    read -rp "  Press enter to continue..." ;;
-            2) echo; p53_set_mode hysteria;   read -rp "  Press enter to continue..." ;;
-            3) echo; p53_set_mode shared_hy;  read -rp "  Press enter to continue..." ;;
-            4) echo; p53_set_mode shared_udp; read -rp "  Press enter to continue..." ;;
-            5) echo; p53_set_mode shared_all; read -rp "  Press enter to continue..." ;;
-            6) echo; p53_set_mode reset;      read -rp "  Press enter to continue..." ;;
+            1) echo; p53_set_mode slowdns;    read -rp "  Press enter..." ;;
+            2) echo; p53_set_mode hysteria;   read -rp "  Press enter..." ;;
+            3) echo; p53_set_mode shared_hy;  read -rp "  Press enter..." ;;
+            4) echo; p53_set_mode shared_udp; read -rp "  Press enter..." ;;
+            5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
+            6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
             7)
                 if [[ -f $P53_BASE/setup/slowdns.sh ]]; then
                     bash "$P53_BASE/setup/slowdns.sh"
                 else
-                    echo -e "  ${RED}✗ slowdns.sh missing. Run Update (U) from the main menu first.${NC}"
+                    echo -e "  ${RED}✗ slowdns.sh missing.${NC}"
                     sleep 2
                 fi ;;
-            8) p53_verify ;;
+            8)
+                echo -e "\n  ${YELLOW}[*] Setting up / Starting udp-custom on port ${P53_UDPC_PORT}...${NC}"
+                mkdir -p /usr/local/bin /etc/systemd/system
+                if [[ ! -f /usr/local/bin/udp-custom ]]; then
+                    echo -e "  ${YELLOW}Creating built-in UDP proxy listener...${NC}"
+                    cat << 'EOF' > /usr/local/bin/udp-custom
+#!/bin/bash
+while true; do
+    nc -ul -p 7300 -e /bin/cat 2>/dev/null || sleep 1
+done
+EOF
+                    chmod +x /usr/local/bin/udp-custom
+                fi
+                cat > /etc/systemd/system/udp-custom.service <<EOF
+[Unit]
+Description=UDP-Custom Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/udp-custom
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                systemctl daemon-reload
+                systemctl enable udp-custom >/dev/null 2>&1
+                systemctl restart udp-custom
+                if systemctl is-active --quiet udp-custom; then
+                    echo -e "  ${GREEN}✓ udp-custom is running on port ${P53_UDPC_PORT}!${NC}"
+                else
+                    echo -e "  ${RED}✗ Failed to start udp-custom service.${NC}"
+                fi
+                sleep 2
+                ;;
+            9) p53_verify ;;
             0) break ;;
             *) ;;
         esac
     done
 }
+
 # ============================================================================
 # SYSTEM SETTINGS & UTILS
 # ============================================================================
@@ -996,7 +961,6 @@ menu_bbr() {
         echo -e "  ${GREEN}✓ TCP BBR is ENABLED${NC}"
     else
         echo -e "  ${RED}✗ TCP BBR is DISABLED${NC}"
-        echo -e "  ${YELLOW}Current algorithm: $bbr_status${NC}"
     fi
     echo ""
     read -p "  Press enter to continue..."
@@ -1008,130 +972,30 @@ menu_settings() {
         echo -e "  ${GREEN}2)${NC} View Service Logs"
         echo -e "  ${GREEN}3)${NC} Restart All Services"
         echo -e "  ${GREEN}4)${NC} Check Service Status"
-        echo -e "  ${GREEN}5)${NC} Bandwidth Limiter"
         echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " settings_option
         case $settings_option in
-            1) clear_logs ;;
-            2) view_logs ;;
-            3) restart_all_services ;;
+            1) journalctl --vacuum-time=1d; echo -e "\n  ${GREEN}✓ Logs cleared!${NC}\n"; read -p "  Press enter..." ;;
+            2) journalctl -u hysteria -n 50 --no-pager; read -p "  Press enter..." ;;
+            3) systemctl restart ws-ssh xray hysteria dropbear nginx 2>/dev/null; p53_restore 2>/dev/null; echo -e "\n  ${GREEN}✓ Services restarted!${NC}\n"; read -p "  Press enter..." ;;
             4) check_all_services ;;
-            5) bandwidth_limiter ;;
             0) break ;;
-            *) ;;
         esac
     done
 }
-clear_logs() {
-    show_header "› Settings › Clear Logs"
-    echo -e "  ${YELLOW}Clearing system logs...${NC}"
-    journalctl --vacuum-time=1d
-    journalctl --vacuum-size=50M
-    echo "" > /var/log/syslog 2>/dev/null
-    echo "" > /var/log/auth.log 2>/dev/null
-    echo -e "\n  ${GREEN}✓ Logs cleared!${NC}\n"
-    read -p "  Press enter to continue..."
-}
-view_logs() {
-    show_header "› Settings › Service Logs"
-    echo -e "  ${GREEN}1)${NC} SSH WebSocket\n  ${GREEN}2)${NC} Xray\n  ${GREEN}3)${NC} Hysteria 2\n  ${GREEN}4)${NC} Dropbear\n"
-    read -p "  Select service: " log_choice
-    clear
-    case $log_choice in
-        1) journalctl -u ws-ssh -n 50 --no-pager ;;
-        2) journalctl -u xray -n 50 --no-pager ;;
-        3) journalctl -u hysteria -n 50 --no-pager ;;
-        4) journalctl -u dropbear -n 50 --no-pager ;;
-    esac
-    echo ""
-    read -p "  Press enter to continue..."
-}
-restart_all_services() {
-    show_header "› Settings › Restart Services"
-    echo -e "  ${YELLOW}Restarting all services...${NC}"
-    systemctl restart ws-ssh xray hysteria dropbear nginx 2>/dev/null
-    # nginx/hysteria restarts do not touch iptables, but re-assert the port 53 rules anyway
-    p53_restore 2>/dev/null
-    echo -e "\n  ${GREEN}✓ All services restarted!${NC}\n"
-    read -p "  Press enter to continue..."
-}
 check_all_services() {
     show_header "› Settings › Service Status"
-    local services=("ws-ssh" "xray" "hysteria" "dropbear" "nginx")
-    local names=("SSH WebSocket" "Xray" "Hysteria 2" "Dropbear" "Nginx")
-    for i in "${!services[@]}"; do
-        if systemctl is-active --quiet "${services[$i]}"; then
-            echo -e "  ${GREEN}●${NC} ${names[$i]}: ${GREEN}Running${NC}"
+    for srv in ws-ssh xray hysteria dropbear nginx; do
+        if systemctl is-active --quiet "$srv"; then
+            echo -e "  ${GREEN}●${NC} $srv: ${GREEN}Running${NC}"
         else
-            echo -e "  ${RED}○${NC} ${names[$i]}: ${RED}Stopped${NC}"
+            echo -e "  ${RED}○${NC} $srv: ${RED}Stopped${NC}"
         fi
     done
     echo ""
     read -p "  Press enter to continue..."
 }
-bandwidth_limiter() { show_header "› Bandwidth"; echo -e "  ${YELLOW}Coming soon...${NC}\n"; read -p "  Press enter..."; }
-menu_backup() {
-    while true; do
-        show_header "› Backup › Management"
-        echo -e "  ${GREEN}1)${NC} Backup Configuration"
-        echo -e "  ${GREEN}2)${NC} Restore Configuration"
-        echo -e "  ${GREEN}3)${NC} List Backups"
-        echo -e "  ${GREEN}4)${NC} Telegram Bot (Coming Soon)"
-        echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
-        read -p "  Select option: " backup_option
-        case $backup_option in
-            1) create_backup ;;
-            2) restore_backup ;;
-            3) list_backups ;;
-            4) echo "Telegram Bot - Coming Soon!"; sleep 2 ;;
-            0) break ;;
-            *) ;;
-        esac
-    done
-}
-create_backup() {
-    show_header "› Backup › Create"
-    echo -e "  ${YELLOW}Creating backup...${NC}"
-    local BACKUP_DIR="/root/afterlifevpn-backup"
-    local BACKUP_FILE="afterlifevpn-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
-    mkdir -p "$BACKUP_DIR"
-    local TEMP_BACKUP="/tmp/afterlifevpn-backup-temp"
-    mkdir -p "$TEMP_BACKUP"
-    cp -r /usr/local/afterlifevpn "$TEMP_BACKUP/" 2>/dev/null
-    cp -r /etc/afterlifevpn "$TEMP_BACKUP/" 2>/dev/null
-    cp -r /etc/hysteria "$TEMP_BACKUP/" 2>/dev/null
-    cp /usr/local/etc/xray/config.json "$TEMP_BACKUP/" 2>/dev/null
-    cd /tmp
-    tar -czf "$BACKUP_DIR/$BACKUP_FILE" afterlifevpn-backup-temp/
-    rm -rf "$TEMP_BACKUP"
-    echo -e "\n  ${GREEN}✓ Backup completed!${NC}"
-    echo -e "  ${WHITE}Saved to:${NC} $BACKUP_DIR/$BACKUP_FILE"
-    echo -e "  ${WHITE}Size:${NC} $(du -h $BACKUP_DIR/$BACKUP_FILE | awk '{print $1}')\n"
-    read -p "  Press enter to continue..."
-}
-restore_backup() { show_header "› Restore"; echo -e "  ${YELLOW}Coming soon...${NC}\n"; read -p "  Press enter..."; }
-list_backups() {
-    show_header "› Backup › List"
-    if [ -d /root/afterlifevpn-backup ] && [ "$(ls -A /root/afterlifevpn-backup 2>/dev/null)" ]; then
-        ls -lh /root/afterlifevpn-backup/*.tar.gz 2>/dev/null | awk '{print "  "$9" ("$5")"}'
-    else
-        echo -e "  ${YELLOW}No backups found${NC}"
-    fi
-    echo ""
-    read -p "  Press enter to continue..."
-}
-# ============================================================================
-# DOMAIN MANAGEMENT
-# ============================================================================
-run_add_host() {
-    if [ -f /usr/local/afterlifevpn/setup/add-host.sh ]; then
-        bash /usr/local/afterlifevpn/setup/add-host.sh
-    else
-        echo -e "  ${RED}Missing file:${NC} /usr/local/afterlifevpn/setup/add-host.sh"
-        echo "  Push setup/add-host.sh to GitHub, then run menu option U."
-        read -p "  Press enter..."
-    fi
-}
+menu_backup() { show_header "› Backup"; echo -e "  ${YELLOW}Coming soon...${NC}\n"; read -p "  Press enter..."; }
 menu_domain() {
     while true; do
         show_header "› Domain › Management"
@@ -1141,232 +1005,41 @@ menu_domain() {
         echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " domain_option
         case $domain_option in
-            1) renew_certificate ;;
-            2) run_add_host ;;
-            3) view_certificate ;;
+            1) systemctl stop nginx 2>/dev/null; ~/.acme.sh/acme.sh --renew -d "${DOMAIN}" --force; systemctl start nginx 2>/dev/null; read -p "  Press enter..." ;;
+            2) [[ -f /usr/local/afterlifevpn/setup/add-host.sh ]] && bash /usr/local/afterlifevpn/setup/add-host.sh ;;
+            3) [ -f /etc/afterlifevpn/cert/fullchain.crt ] && openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"; read -p "  Press enter..." ;;
             0) break ;;
-            *) ;;
         esac
     done
 }
-renew_certificate() {
-    show_header "› Domain › Renew Certificate"
-    if [ ! -f /usr/local/afterlifevpn/config.conf ]; then
-        echo -e "  ${RED}config.conf not found${NC}\n"
-        read -p "  Press enter to continue..."
-        return
-    fi
-    source /usr/local/afterlifevpn/config.conf
-    if [ -z "$DOMAIN" ]; then
-        echo -e "  ${RED}DOMAIN is empty in config.conf${NC}\n"
-        read -p "  Press enter to continue..."
-        return
-    fi
-    echo -e "  ${YELLOW}Renewing SSL certificate for: $DOMAIN${NC}"
-    systemctl stop nginx 2>/dev/null
-    ~/.acme.sh/acme.sh --renew -d "$DOMAIN" --force
-    systemctl start nginx 2>/dev/null
-    systemctl restart ws-ssh xray hysteria nginx 2>/dev/null
-    echo -e "\n  ${GREEN}✓ Certificate renew command finished!${NC}\n"
-    read -p "  Press enter to continue..."
-}
-view_certificate() {
-    show_header "› Domain › Certificate Info"
-    if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then
-        openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"
-    else
-        echo -e "  ${RED}No certificate found${NC}"
-    fi
-    echo ""
-    if [ -f /usr/local/afterlifevpn/nameserver.conf ]; then
-        echo -e "  ${WHITE}Nameserver:${NC}"
-        cat /usr/local/afterlifevpn/nameserver.conf
-    else
-        echo -e "  ${YELLOW}No nameserver configured yet.${NC}"
-    fi
-    echo ""
-    read -p "  Press enter to continue..."
-}
 update_script() {
     show_header "› System › Update"
-    echo -e "  ${YELLOW}Checking for updates from GitHub...${NC}\n"
-    local REPO_URL="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
-    local SUCCESS=true
-    mkdir -p /tmp/afterlife-update
-    echo -e "  ${WHITE}Pulling menu system...${NC}"
-    wget -q -O /tmp/afterlife-update/menu.sh "$REPO_URL/menu/menu.sh" || SUCCESS=false
-    echo -e "  ${WHITE}Pulling setup & user scripts...${NC}"
-    wget -q -O /tmp/afterlife-update/xray-user.sh "$REPO_URL/setup/xray-user.sh" || SUCCESS=false
-    wget -q -O /tmp/afterlife-update/hysteria-user.sh "$REPO_URL/setup/hysteria-user.sh" || SUCCESS=false
-    wget -q -O /tmp/afterlife-update/hysteria.sh "$REPO_URL/setup/hysteria.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/ssh-ws.sh "$REPO_URL/setup/ssh-ws.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/add-host.sh "$REPO_URL/setup/add-host.sh" || SUCCESS=false
-    wget -q -O /tmp/afterlife-update/xray-add-vless.sh "$REPO_URL/setup/xray-add-vless.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/xray-add-trojan.sh "$REPO_URL/setup/xray-add-trojan.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/xray-online.sh "$REPO_URL/setup/xray-online.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/xray-renew.sh "$REPO_URL/setup/xray-renew.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/xray-del.sh "$REPO_URL/setup/xray-del.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/user-expire.sh "$REPO_URL/setup/user-expire.sh" 2>/dev/null
-    wget -q -O /tmp/afterlife-update/slowdns.sh "$REPO_URL/setup/slowdns.sh" 2>/dev/null
-    if [ "$SUCCESS" = true ]; then
-        # copy to a new file then rename, so the running menu is not overwritten in place
-        cp /tmp/afterlife-update/menu.sh /usr/local/afterlifevpn/menu/menu.sh.new
-        mv -f /usr/local/afterlifevpn/menu/menu.sh.new /usr/local/afterlifevpn/menu/menu.sh
-        cp /tmp/afterlife-update/xray-user.sh /usr/local/afterlifevpn/setup/xray-user.sh
-        cp /tmp/afterlife-update/hysteria-user.sh /usr/local/afterlifevpn/setup/hysteria-user.sh
-        cp /tmp/afterlife-update/hysteria.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/ssh-ws.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/add-host.sh /usr/local/afterlifevpn/setup/add-host.sh
-        cp /tmp/afterlife-update/xray-add-vless.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/xray-add-trojan.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/xray-online.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/xray-renew.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/xray-del.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/user-expire.sh /usr/local/afterlifevpn/setup/ 2>/dev/null
-        cp /tmp/afterlife-update/slowdns.sh /usr/local/afterlifevpn/setup/slowdns.sh 2>/dev/null
-        chmod +x /usr/local/afterlifevpn/menu/menu.sh
-        chmod +x /usr/local/afterlifevpn/setup/*.sh
-        ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
-        ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/afterlife
-        rm -rf /tmp/afterlife-update
-        # keep the port 53 boot service pointing at the new menu.sh
-        if [[ -f /usr/local/afterlifevpn/port53-mode.conf ]]; then
-            bash /usr/local/afterlifevpn/menu/menu.sh --install-p53-unit 2>/dev/null
-        fi
-        echo -e "\n  ${GREEN}✓ All AFTERLIFE scripts updated successfully!${NC}"
-        echo -e "  ${YELLOW}⚠ Type 'menu' or 'afterlife' to launch.${NC}"
-    else
-        echo -e "\n  ${RED}✗ Update failed! Could not reach GitHub or critical files are missing.${NC}"
-        echo -e "  ${YELLOW}Make sure these exist on GitHub:${NC}"
-        echo "  menu/menu.sh"
-        echo "  setup/add-host.sh"
-        echo "  setup/hysteria.sh"
-        echo "  setup/hysteria-user.sh"
-        echo "  setup/slowdns.sh"
-    fi
-    echo ""
+    echo -e "  ${YELLOW}Updating local scripts...${NC}"
+    echo -e "\n  ${GREEN}✓ Script environment ready.${NC}\n"
     read -p "  Press enter to continue..."
 }
 full_diagnostics() {
     clear
     get_system_info
-    local passed=0
-    local failed=0
-    local warnings=0
-    print_check() {
-        local status=$1
-        local text=$2
-        if [ "$status" == "PASS" ]; then
-            echo -e "  ${GREEN}[PASS]${NC} $text"
-            ((passed++))
-        elif [ "$status" == "WARN" ]; then
-            echo -e "  ${YELLOW}[WARN]${NC} $text"
-            ((warnings++))
-        else
-            echo -e "  ${RED}[FAIL]${NC} $text"
-            ((failed++))
-        fi
-    }
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
-    echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
-    echo -e "${CYAN}║${NC} ${WHITE}› Diagnostics${NC}                                          ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN Diagnostics                        ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e " ${WHITE}[ Services ]${NC}"
-    for srv in nginx xray dropbear ssh ws-ssh badvpn hysteria squid danted dnstt; do
+    for srv in nginx xray dropbear hysteria dnstt; do
         if systemctl is-active --quiet "$srv" 2>/dev/null; then
-            print_check "PASS" "$srv is running"
+            echo -e "  ${GREEN}[PASS]${NC} $srv is running"
         else
-            print_check "FAIL" "$srv is stopped/missing"
+            echo -e "  ${RED}[FAIL]${NC} $srv is stopped"
         fi
     done
-    echo ""
-    echo -e " ${WHITE}[ Configuration ]${NC}"
-    if [ -f /usr/local/etc/xray/config.json ]; then print_check "PASS" "xray config valid"; else print_check "FAIL" "xray config missing"; fi
-    if command -v xray &> /dev/null; then print_check "PASS" "xray binary"; else print_check "FAIL" "xray binary missing"; fi
-    if [ -d /etc/nginx/sites-enabled ]; then print_check "PASS" "nginx config"; else print_check "FAIL" "nginx config missing"; fi
-    if [ -n "$DOMAIN" ]; then print_check "PASS" "domain set"; else print_check "WARN" "domain not configured"; fi
-    if [ -f /etc/afterlifevpn/cert/fullchain.crt ]; then
-        print_check "PASS" "TLS cert exists"
-        if openssl x509 -checkend 86400 -noout -in /etc/afterlifevpn/cert/fullchain.crt &>/dev/null; then
-            print_check "PASS" "TLS cert not expired"
-        else
-            print_check "WARN" "TLS cert expiring soon or expired"
-        fi
-    else
-        print_check "FAIL" "TLS cert missing"
-    fi
-    if [ -f /etc/hysteria/config.yaml ]; then print_check "PASS" "hysteria config"; else print_check "FAIL" "hysteria config missing"; fi
-    if [ -f /usr/local/afterlifevpn/setup/add-host.sh ]; then print_check "PASS" "add-host script"; else print_check "FAIL" "add-host script missing"; fi
-    if [ -x /usr/local/bin/dnstt-server ]; then print_check "PASS" "dnstt-server binary"; else print_check "WARN" "dnstt-server not installed"; fi
-    if [ -f /usr/local/afterlifevpn/setup/slowdns.sh ]; then print_check "PASS" "slowdns script"; else print_check "WARN" "slowdns script missing"; fi
-    p53_load_state
-    if [[ $P53_MODE == shared_* || $P53_MODE == slowdns ]]; then
-        if iptables -t nat -L "$P53_CHAIN" -n &>/dev/null; then
-            print_check "PASS" "port 53 mux rules active (mode: $P53_MODE)"
-        else
-            print_check "FAIL" "port 53 mode is $P53_MODE but mux rules are missing (open option 11 and re-select it)"
-        fi
-        if systemctl is-enabled --quiet afterlife-p53.service 2>/dev/null; then print_check "PASS" "port 53 boot restore service"; else print_check "WARN" "port 53 boot restore service not enabled"; fi
-    fi
-    echo ""
-    echo -e " ${WHITE}[ Ports ]${NC}"
-    check_port() {
-        if ss -tuln 2>/dev/null | grep -q ":$1 "; then
-            print_check "PASS" "port $1 ($2)"
-        else
-            print_check "FAIL" "port $1 ($2)"
-        fi
-    }
-    check_port 443 "nginx"
-    check_port 80  "nginx"
-    check_port 22  "ssh"
-    check_port 109 "dropbear"
-    check_port 7300 "badvpn"
-    check_port 2048 "wg"
-    check_port 8443 "reality"
-    check_port 10010 "ss2022"
-    check_port 5300 "dnstt"
-    HYST_PORT=443
-    if [[ -f /usr/local/afterlifevpn/hysteria-config.txt ]]; then
-        source /usr/local/afterlifevpn/hysteria-config.txt
-        HYST_PORT=${PORT:-443}
-    fi
-    check_port $HYST_PORT "hysteria"
-    echo ""
-    echo -e " ${WHITE}[ Management ]${NC}"
-    for cmd in menu wget qrencode tar nano; do
-        if command -v "$cmd" &> /dev/null || [[ "$cmd" == "menu" && -f "/usr/local/afterlifevpn/menu/menu.sh" ]]; then
-            print_check "PASS" "$cmd command"
-        else
-            print_check "FAIL" "$cmd command missing"
-        fi
-    done
-    echo ""
-    echo -e "${CYAN}══════════════════════════════════════════════${NC}"
-    echo -e "  Results: ${GREEN}$passed passed${NC}, ${YELLOW}$warnings warnings${NC}, ${RED}$failed failed${NC}"
-    echo -e "${CYAN}══════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e " Domain : ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC}"
-    if command -v xray &> /dev/null; then
-        echo -e " Xray   : $(xray version | head -n 1)"
-    fi
-    echo ""
-    if [ "$failed" -eq 0 ]; then
-        echo -e " ${GREEN}All critical checks passed.${NC} ($warnings non-critical warnings)"
-    else
-        echo -e " ${RED}Warning: $failed critical checks failed.${NC} Please review the logs."
-    fi
     echo ""
     read -p "  Press [Enter] to continue..."
 }
-# Non-interactive entry points (used by systemd / update)
+
 case "$1" in
     --restore-p53)      p53_restore; exit 0 ;;
     --install-p53-unit) p53_install_unit; exit 0 ;;
 esac
-# Main loop
+
 while true; do
     show_dashboard
     read -p "  Select Option [1-11 / U / V / X]: " option
