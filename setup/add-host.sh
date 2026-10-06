@@ -176,30 +176,21 @@ case $option in
         fi
 
         cat > "$NS_FILE" <<EOF
-NS_HOST=$ns_host
-NS_IP=$PUBLIC_IP
-DOMAIN=$DOMAIN
+NS_HOST="$ns_host"
+NS_DOMAIN="$ns_host"
+NS_IP="$PUBLIC_IP"
+DOMAIN="$DOMAIN"
 EOF
 
         echo ""
         echo -e "${GREEN}Saved nameserver config.${NC}"
         echo ""
-        echo -e "${YELLOW}Add these DNS records at your domain registrar:${NC}"
-        echo ""
-        echo "  Type : A"
-        echo "  Name : $ns_host"
-        echo "  Value: $PUBLIC_IP"
-        echo "  TTL  : 300"
-        echo ""
-        echo "  Type : NS"
-        echo "  Name : sl"
-        echo "  Value: $ns_host"
-        echo ""
-        echo "Example SlowDNS target later:"
-        echo -e "  ${GREEN}sl.${DOMAIN}${NC}"
+        echo -e "${YELLOW}Please create the following records in your DNS manager:${NC}"
+        echo -e "  ${WHITE}1. A Record :${NC} Name = ${GREEN}${DOMAIN}${NC} -> Target = ${YELLOW}$PUBLIC_IP${NC}"
+        echo -e "  ${WHITE}2. NS Record:${NC} Name = ${GREEN}${ns_host}${NC} -> Target = ${YELLOW}${DOMAIN}${NC}"
         echo ""
         echo -e "${YELLOW}Note:${NC} This only stores nameserver info."
-        echo "dnstt is not installed by this step."
+        echo "dnstt is not installed by this step. Use Option 11 -> 7 to install."
         ;;
     6)
         clear
@@ -209,8 +200,8 @@ EOF
             # shellcheck disable=SC1090
             source "$NS_FILE"
             echo -e " Nameserver : ${GREEN}${NS_HOST}${NC}"
+            echo -e " Main Domain: ${GREEN}${DOMAIN}${NC}"
             echo -e " Points to  : ${GREEN}${NS_IP}${NC}"
-            echo -e " Domain     : ${GREEN}${DOMAIN}${NC}"
         else
             echo -e "${RED}No nameserver configured yet.${NC}"
             echo "Use option 5 first."
