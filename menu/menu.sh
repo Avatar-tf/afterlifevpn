@@ -4,7 +4,8 @@ if [[ $EUID -ne 0 ]]; then
     echo -e "\033[0;31mError: This script must be run as root.\033[0m"
     exit 1
 fi
-# Exit instead of spinning when the terminal disappears (prompt read gets EOF/EIO)
+
+# Exit instead of spinning when the terminal disappears
 trap 'exit 0' HUP TERM
 read() {
     builtin read "$@" && return 0
@@ -13,6 +14,7 @@ read() {
     return $rc
 }
 export -f read
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,10 +24,32 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
-# Load configuration
+
+# Load configuration and Nameserver
 if [ -f /usr/local/afterlifevpn/config.conf ]; then
     source /usr/local/afterlifevpn/config.conf
 fi
+ACTIVE_NS=""
+if [ -f /usr/local/afterlifevpn/nameserver.conf ]; then
+    ACTIVE_NS=$(grep -E "^NS_HOST=" /usr/local/afterlifevpn/nameserver.conf | cut -d'"' -f2 | cut -d"'" -f2)
+fi
+
+# Smart Iptables Wrapper (Forces legacy over nftables for Azure compatibility)
+ipt_cmd() {
+    if command -v iptables-legacy >/dev/null 2>&1; then
+        iptables-legacy "$@"
+    else
+        iptables "$@"
+    fi
+}
+ipt_save_cmd() {
+    if command -v iptables-legacy-save >/dev/null 2>&1; then
+        iptables-legacy-save "$@"
+    else
+        iptables-save "$@"
+    fi
+}
+
 # Get system information
 get_system_info() {
     HOSTNAME=$(hostname)
@@ -35,10 +59,11 @@ get_system_info() {
     CPU_CORES=$(nproc)
     CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)
     CPU_USAGE_INT=${CPU_USAGE%.*}
-    read TOTAL_RAM USED_RAM <<< $(free -m | awk 'NR==2{print $2, $3}')
+    read -r TOTAL_RAM USED_RAM <<< $(free -m | awk 'NR==2{print $2, $3}')
     RAM_PERCENT=$((USED_RAM * 100 / TOTAL_RAM))
-    read TOTAL_DISK USED_DISK DISK_PERCENT <<< $(df -h / | awk 'NR==2{print $2, $3, $5}' | tr -d '%')
+    read -r TOTAL_DISK USED_DISK DISK_PERCENT <<< $(df -h / | awk 'NR==2{print $2, $3, $5}' | tr -d '%')
 }
+
 # Create progress bar
 create_bar() {
     local percent=$1
@@ -53,6 +78,7 @@ create_bar() {
     empty_bar=${empty_bar// /░}
     printf "[%s%s]" "$fill_bar" "$empty_bar"
 }
+
 # Check service status
 check_service() {
     if systemctl is-active --quiet "$1" 2>/dev/null; then
@@ -61,6 +87,7 @@ check_service() {
         echo -e "${RED}○${NC}"
     fi
 }
+
 # Count total users
 count_users() {
     local total=0
@@ -78,23 +105,31 @@ count_users() {
     fi
     echo $total
 }
+
 # Simple header for subpages
 show_header() {
     local breadcrumb=$1
     clear
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
+    if [[ -n "$ACTIVE_NS" ]]; then
+        echo -e "${CYAN}║${NC} ${CYAN}Nameserver:${NC}                      ${GREEN}${ACTIVE_NS}${NC} ${CYAN}║${NC}"
+    fi
     echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
     printf "${CYAN}║${NC} ${WHITE}%-54s${NC}${CYAN}║${NC}\n" "$breadcrumb"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
+
 # Display main dashboard
 show_dashboard() {
     clear
     get_system_info
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN${NC}                    ${YELLOW}${DOMAIN:-$PUBLIC_IP}${NC} ${CYAN}║${NC}"
+    if [[ -n "$ACTIVE_NS" ]]; then
+        echo -e "${CYAN}║${NC} ${CYAN}Nameserver:${NC}                      ${GREEN}${ACTIVE_NS}${NC} ${CYAN}║${NC}"
+    fi
     echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
     echo -e "${CYAN}║${NC} ${WHITE}› AFTERLIFE › Core${NC}                                       ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
@@ -122,6 +157,7 @@ show_dashboard() {
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
     echo -e ""
 }
+
 # ============================================================================
 # SSH & DROPBEAR MANAGEMENT
 # ============================================================================
@@ -326,7 +362,7 @@ change_dropbear_port() {
         ufw allow ${new_port}/tcp >/dev/null 2>&1
         echo -e "  ${GREEN}✓ Firewall (ufw) updated${NC}"
     else
-        iptables -I INPUT -p tcp --dport $new_port -j ACCEPT 2>/dev/null
+        ipt_cmd -I INPUT -p tcp --dport $new_port -j ACCEPT 2>/dev/null
         netfilter-persistent save >/dev/null 2>&1 || true
         echo -e "  ${GREEN}✓ Firewall (iptables) updated${NC}"
     fi
@@ -394,6 +430,7 @@ EOF
         3) echo "" > /etc/issue.net; systemctl restart dropbear ssh; echo -e "\n  ${GREEN}✓ Banner disabled!${NC}"; sleep 2 ;;
     esac
 }
+
 # ============================================================================
 # XRAY MANAGEMENT
 # ============================================================================
@@ -501,7 +538,7 @@ EOF
     echo -e " ${WHITE}Port${NC}         : ${CYAN}443${NC}"
     echo -e " ${WHITE}Network${NC}      : ${CYAN}ws (TLS)${NC}"
     echo -e " ${WHITE}Path${NC}         : ${CYAN}/vmess${NC}"
-    echo -e " ${CYAN}────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}────────────────────────────────────────────────────────${NC}"
     echo -e " ⚡ ${WHITE}STANDARD LINK${NC}"
     echo -e "   ${YELLOW}$VMESS_LINK${NC}"
     if command -v qrencode &> /dev/null; then
@@ -545,6 +582,7 @@ list_vmess_users() {
     echo ""
     read -p "  Press enter to continue..."
 }
+
 # ============================================================================
 # HYSTERIA 2 MANAGEMENT
 # ============================================================================
@@ -586,6 +624,7 @@ menu_hysteria() {
         esac
     done
 }
+
 # ============================================================================
 # PORT 53 MULTIPLEXER (SlowDNS / Hysteria / UDP-Custom)
 # ============================================================================
@@ -643,16 +682,10 @@ p53_ensure_iptables() {
 p53_mux_clear() {
     command -v iptables >/dev/null 2>&1 || return 0
     p53_hop_clear
-    while iptables -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
-    iptables -t nat -F "$P53_CHAIN" 2>/dev/null
-    iptables -t nat -X "$P53_CHAIN" 2>/dev/null
-    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
-    
-    if command -v iptables-legacy >/dev/null 2>&1; then
-        while iptables-legacy -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
-        iptables-legacy -t nat -F "$P53_CHAIN" 2>/dev/null
-        iptables-legacy -t nat -X "$P53_CHAIN" 2>/dev/null
-    fi
+    while ipt_cmd -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
+    ipt_cmd -t nat -F "$P53_CHAIN" 2>/dev/null
+    ipt_cmd -t nat -X "$P53_CHAIN" 2>/dev/null
+    while ipt_cmd -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
 }
 
@@ -660,18 +693,18 @@ P53_HOP_FLAG=$P53_BASE/port-hop.enabled
 P53_HOP_CHAIN=AFTERLIFE_HOP
 p53_hop_clear() {
     command -v iptables >/dev/null 2>&1 || return 0
-    while iptables -t nat -D PREROUTING -j "$P53_HOP_CHAIN" 2>/dev/null; do :; done
-    iptables -t nat -F "$P53_HOP_CHAIN" 2>/dev/null
-    iptables -t nat -X "$P53_HOP_CHAIN" 2>/dev/null
+    while ipt_cmd -t nat -D PREROUTING -j "$P53_HOP_CHAIN" 2>/dev/null; do :; done
+    ipt_cmd -t nat -F "$P53_HOP_CHAIN" 2>/dev/null
+    ipt_cmd -t nat -X "$P53_HOP_CHAIN" 2>/dev/null
 }
 
 p53_hop_apply() {
     p53_hop_clear
     [[ -f $P53_HOP_FLAG ]] || return 0
-    iptables -t nat -N "$P53_HOP_CHAIN" || return 1
-    iptables -t nat -A "$P53_HOP_CHAIN" -p udp --dport 20000:36711 -j REDIRECT --to-ports "$P53_HY_PORT"
-    iptables -t nat -A "$P53_HOP_CHAIN" -p udp --dport 36713:40000 -j REDIRECT --to-ports "$P53_HY_PORT"
-    iptables -t nat -I PREROUTING 1 -p udp -m multiport --dports 20000:40000 -j "$P53_HOP_CHAIN" || { p53_hop_clear; return 1; }
+    ipt_cmd -t nat -N "$P53_HOP_CHAIN" || return 1
+    ipt_cmd -t nat -A "$P53_HOP_CHAIN" -p udp --dport 20000:36711 -j REDIRECT --to-ports "$P53_HY_PORT"
+    ipt_cmd -t nat -A "$P53_HOP_CHAIN" -p udp --dport 36713:40000 -j REDIRECT --to-ports "$P53_HY_PORT"
+    ipt_cmd -t nat -I PREROUTING 1 -p udp -m multiport --dports 20000:40000 -j "$P53_HOP_CHAIN" || { p53_hop_clear; return 1; }
 }
 
 p53_fw_open() {
@@ -679,8 +712,8 @@ p53_fw_open() {
     for p in "$@"; do
         if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
             ufw allow "${p}/udp" >/dev/null 2>&1
-        elif iptables -S INPUT 2>/dev/null | head -n1 | grep -q 'DROP'; then
-            iptables -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$p" -j ACCEPT
+        elif ipt_cmd -S INPUT 2>/dev/null | head -n1 | grep -q 'DROP'; then
+            ipt_cmd -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || ipt_cmd -I INPUT -p udp --dport "$p" -j ACCEPT
         fi
     done
 }
@@ -692,34 +725,34 @@ p53_mux_apply() {
     p53_ensure_iptables || return 1
     modprobe xt_u32 2>/dev/null
 
-    iptables -t nat -N "$P53_CHAIN" || return 1
-    iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
+    ipt_cmd -t nat -N "$P53_CHAIN" || return 1
+    ipt_cmd -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
 
     if [[ $mode == slowdns ]]; then
-        iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
+        ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
         p53_fw_open "$P53_SLOWDNS_PORT"
     else
-        iptables -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@2&0xFFFF=0x0100" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
+        ipt_cmd -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@2&0xFFFF=0x0100" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
 
         case $mode in
             shared_hy)
-                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
                 p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT"
                 p53_hop_apply ;;
             shared_udp)
-                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
                 p53_fw_open "$P53_SLOWDNS_PORT" "$P53_UDPC_PORT" ;;
             shared_all)
-                iptables -t nat -A "$P53_CHAIN" -p udp \
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp \
                     -m u32 --u32 "0>>22&0x3C@8>>24&0xF0=0xC0 && 0>>22&0x3C@9=0x00000001" \
                     -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
-                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
                 p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" "$P53_UDPC_PORT" ;;
         esac
     fi
 
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
-    command -v iptables-save >/dev/null 2>&1 && iptables-save > /etc/iptables/rules.v4 2>/dev/null
+    ipt_save_cmd > /etc/iptables/rules.v4 2>/dev/null
 }
 
 p53_install_unit() {
@@ -857,7 +890,7 @@ p53_set_mode() {
 p53_verify() {
     clear
     echo -e "${YELLOW}--- $P53_CHAIN packet counters ---${NC}\n"
-    iptables -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX chain not active.${NC}"
+    ipt_cmd -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX chain not active.${NC}"
     echo
     read -rp "  Press enter to return..."
 }
@@ -870,6 +903,9 @@ menu_port53() {
         clear
         echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
         printf "${CYAN}║ ${WHITE}AFTERLIFE VPN                                    ${YELLOW}%-17s${CYAN} ║\n${NC}" "${DOMAIN:-$(hostname)}"
+        if [[ -n "$ACTIVE_NS" ]]; then
+            echo -e "${CYAN}║${NC} ${CYAN}Nameserver:${NC}                      ${GREEN}${ACTIVE_NS}${NC} ${CYAN}║${NC}"
+        fi
         echo -e "${CYAN}╠────────────────────────────────────────────────────────╣${NC}"
         echo -e "${CYAN}║ ${YELLOW}› Main › Port 53 Toggle${CYAN}                                ║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
@@ -908,12 +944,20 @@ menu_port53() {
                 mkdir -p /usr/local/bin /etc/systemd/system
                 if [[ ! -f /usr/local/bin/udp-custom ]]; then
                     echo -e "  ${YELLOW}Creating built-in UDP proxy listener...${NC}"
-                    cat << 'EOF' > /usr/local/bin/udp-custom
-#!/bin/bash
-while true; do
-    nc -ul -p 7300 -e /bin/cat 2>/dev/null || sleep 1
-done
-EOF
+                    cat << 'SUBEOF' > /usr/local/bin/udp-custom
+#!/usr/bin/env python3
+import socket
+import sys
+ip = "0.0.0.0"
+port = 7300
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind((ip, port))
+print(f"UDP-Custom listening on {port}...", flush=True)
+while True:
+    data, addr = sock.recvfrom(65535)
+    if data:
+        sock.sendto(data, addr)
+SUBEOF
                     chmod +x /usr/local/bin/udp-custom
                 fi
                 cat > /etc/systemd/system/udp-custom.service <<EOF
