@@ -812,12 +812,8 @@ p53_need_hy() {
 }
 
 p53_finish() {  # <mode> <hysteria PORT value> <obfs changed 0/1>
-    local link=$2
-    case $1 in hysteria|shared_hy|shared_all) link=53 ;; esac
     echo "MODE=$1" > "$P53_STATE"
-    touch "$P53_HY_TXT"
-    sed -i '/^PORT=/d;/^LINK_PORT=/d' "$P53_HY_TXT"
-    printf 'PORT=%s\nLINK_PORT=%s\n' "$2" "$link" >> "$P53_HY_TXT"
+    echo "PORT=$2" > "$P53_HY_TXT"
     p53_install_unit
     systemctl is-active --quiet hysteria || \
         echo -e "  ${RED}[!] Hysteria is not running - see: journalctl -u hysteria -n 30${NC}"
