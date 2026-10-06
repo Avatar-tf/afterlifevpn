@@ -673,18 +673,27 @@ p53_mux_clear() {
     iptables -t nat -F "$P53_CHAIN" 2>/dev/null
     iptables -t nat -X "$P53_CHAIN" 2>/dev/null
     while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null; do :; done
+    
+    # Clear split-brain legacy rules
+    if command -v iptables-legacy >/dev/null 2>&1; then
+        while iptables-legacy -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
+        iptables-legacy -t nat -F "$P53_CHAIN" 2>/dev/null
+        iptables-legacy -t nat -X "$P53_CHAIN" 2>/dev/null
+    fi
+    
+    # Save to prevent ghost rules from reviving on reboot
+    command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
 }
 
-# Optional Hysteria port hopping. Only applied in shared_hy, and only when $P53_HOP_FLAG exists.
-# 36712 (udp-custom) lies inside 20000-40000, so it is excluded.
 P53_HOP_FLAG=$P53_BASE/port-hop.enabled
 P53_HOP_CHAIN=AFTERLIFE_HOP
 p53_hop_clear() {
     command -v iptables >/dev/null 2>&1 || return 0
-    while iptables -t nat -D PREROUTING -p udp -j "$P53_HOP_CHAIN" 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -j "$P53_HOP_CHAIN" 2>/dev/null; do :; done
     iptables -t nat -F "$P53_HOP_CHAIN" 2>/dev/null
     iptables -t nat -X "$P53_HOP_CHAIN" 2>/dev/null
 }
+
 p53_hop_apply() {
     p53_hop_clear
     [[ -f $P53_HOP_FLAG ]] || return 0
@@ -694,7 +703,6 @@ p53_hop_apply() {
     iptables -t nat -I PREROUTING 1 -p udp -m multiport --dports 20000:40000 -j "$P53_HOP_CHAIN" || { p53_hop_clear; return 1; }
 }
 
-# REDIRECT changes the destination port before the INPUT filter, so the target ports must be allowed.
 p53_fw_open() {
     local p
     for p in "$@"; do
@@ -707,11 +715,11 @@ p53_fw_open() {
 }
 
 p53_mux_apply() {
-    local mode=$1 hex
+    local mode=$1
     p53_mux_clear
     [[ $mode == none || $mode == hysteria ]] && return 0
     p53_ensure_iptables || return 1
-    modprobe xt_string 2>/dev/null; modprobe xt_u32 2>/dev/null
+    modprobe xt_u32 2>/dev/null
 
     iptables -t nat -N "$P53_CHAIN" || return 1
     iptables -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
@@ -719,29 +727,30 @@ p53_mux_apply() {
     if [[ $mode == slowdns ]]; then
         iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
         p53_fw_open "$P53_SLOWDNS_PORT"
-        return 0
+    else
+        # True xt_u32 DNS packet classification (Replaces broken string match)
+        iptables -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@2&0xFFFF=0x0100" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" || { p53_mux_clear; return 1; }
+
+        case $mode in
+            shared_hy)
+                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
+                p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT"
+                p53_hop_apply ;;
+            shared_udp)
+                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+                p53_fw_open "$P53_SLOWDNS_PORT" "$P53_UDPC_PORT" ;;
+            shared_all)
+                iptables -t nat -A "$P53_CHAIN" -p udp \
+                    -m u32 --u32 "0>>22&0x3C@8>>24&0xF0=0xC0 && 0>>22&0x3C@9=0x00000001" \
+                    -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
+                iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
+                p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" "$P53_UDPC_PORT" ;;
+        esac
     fi
 
-    hex=$(p53_dns_hex "$P53_NS")
-    iptables -t nat -A "$P53_CHAIN" -p udp -m string --algo bm --icase --hex-string "|$hex|" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" 2>/dev/null \
-      || iptables -t nat -A "$P53_CHAIN" -p udp -m string --algo bm --hex-string "|$hex|" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT" \
-      || { p53_mux_clear; return 1; }
-
-    case $mode in
-        shared_hy)
-            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
-            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT"
-            p53_hop_apply ;;
-        shared_udp)
-            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
-            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_UDPC_PORT" ;;
-        shared_all)
-            iptables -t nat -A "$P53_CHAIN" -p udp \
-                -m u32 --u32 "0>>22&0x3C@8>>24&0xF0=0xC0 && 0>>22&0x3C@9=0x00000001" \
-                -j REDIRECT --to-ports "$P53_HY_PORT" || { p53_mux_clear; return 1; }
-            iptables -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" || { p53_mux_clear; return 1; }
-            p53_fw_open "$P53_SLOWDNS_PORT" "$P53_HY_PORT" "$P53_UDPC_PORT" ;;
-    esac
+    # Save to rules.v4 to survive reboots and block split-brain
+    command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1
+    command -v iptables-save >/dev/null 2>&1 && iptables-save > /etc/iptables/rules.v4 2>/dev/null
 }
 
 p53_install_unit() {
