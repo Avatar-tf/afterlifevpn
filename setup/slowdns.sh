@@ -74,7 +74,6 @@ validate_keypair() {
     return 0
 }
 
-# 1. Release systemd-resolved stub on :53 without wiping a working resolver
 free_port_53() {
     if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
         echo -e "  ${YELLOW}Configuring systemd-resolved to release port 53...${NC}"
@@ -110,7 +109,6 @@ ensure_build_deps() {
     have_cmd go || key_fail "go is required to build official dnstt-server"
 }
 
-# 2. Prefer an existing binary. Otherwise build official dnstt (no random wget).
 install_dnstt() {
     echo -e "  ${CYAN}Checking dnstt-server binary...${NC}"
     if [[ -x "$BIN" ]]; then
@@ -137,7 +135,6 @@ install_dnstt() {
     echo -e "  ${GREEN}✓ dnstt-server installed to $BIN${NC}"
 }
 
-# 3. Key checks: never rotate a half-pair, never start on a corrupt key
 generate_keys() {
     local priv="$DNS_DIR/server.key"
     local pub="$DNS_DIR/server.pub"
@@ -169,7 +166,6 @@ generate_keys() {
     echo -e "  ${GREEN}✓ keypair generated in $DNS_DIR${NC}"
 }
 
-# 4. systemd unit — bind ALL interfaces on 5300 (mux REDIRECT target)
 setup_service() {
     local target_domain="$1"
     [[ -n "$target_domain" ]] || key_fail "tunnel NS domain is empty"
@@ -213,6 +209,7 @@ wait_listen() {
 
 check_ns_hint() {
     local ns="$1"
+    local m_dom="$2"
     echo -e "  ${CYAN}NS record hint for ${ns}${NC}"
     if have_cmd dig; then
         local ans
@@ -221,7 +218,9 @@ check_ns_hint() {
             echo -e "  NS answers: ${GREEN}${ans//$'\n'/ }${NC}"
         else
             echo -e "  ${YELLOW}No NS found for ${ns} from this host.${NC}"
-            echo -e "  ${YELLOW}Create: ${ns} IN NS <nameserver> and A of that NS -> this VPS IP.${NC}"
+            echo -e "  ${YELLOW}Please create the following records in your DNS manager:${NC}"
+            echo -e "  ${WHITE}1. A Record :${NC} Name = ${GREEN}${m_dom}${NC} -> Target = ${YELLOW}Your VPS IP${NC}"
+            echo -e "  ${WHITE}2. NS Record:${NC} Name = ${GREEN}${ns}${NC} -> Target = ${YELLOW}${m_dom}${NC}"
         fi
     else
         echo -e "  ${YELLOW}Optional: apt-get install -y bind9-dnsutils && dig NS ${ns} +short${NC}"
@@ -244,14 +243,28 @@ SOURCE_DOMAIN=""
 [[ -f "$CONFIG" ]] && source "$CONFIG" && SOURCE_DOMAIN="${DOMAIN:-}"
 [[ -f "$NS_FILE" ]] && source "$NS_FILE"
 
-DEFAULT_TARGET="sl.${DOMAIN:-${SOURCE_DOMAIN:-example.com}}"
-echo -e "  Configured Domain : ${GREEN}${SOURCE_DOMAIN:-${DOMAIN:-N/A}}${NC}"
 echo -e "  Listen            : ${YELLOW}${LISTEN_ADDR}:${LISTEN_PORT}${NC}  (mux target)"
 echo -e "  SSH backend       : ${YELLOW}${SSH_BACKEND}${NC}"
-echo -e "  Target Tunnel NS  : ${YELLOW}${DEFAULT_TARGET}${NC}"
 echo ""
-read -r -p "  Confirm Tunnel Domain [$DEFAULT_TARGET]: " input_target
-TARGET_TUNNEL="${input_target:-$DEFAULT_TARGET}"
+
+# 1. Ask for Main Domain cleanly
+CURRENT_DOMAIN="${SOURCE_DOMAIN:-example.com}"
+read -r -p "  Enter your Main Domain [$CURRENT_DOMAIN]: " input_domain
+MAIN_DOMAIN="${input_domain:-$CURRENT_DOMAIN}"
+
+# 2. Ask for Nameserver Subdomain cleanly (defaulting to ns.domain)
+DEFAULT_NS="ns.${MAIN_DOMAIN}"
+read -r -p "  Enter your Tunnel Nameserver (NS) [$DEFAULT_NS]: " input_ns
+TARGET_TUNNEL="${input_ns:-$DEFAULT_NS}"
+
+# Save the main domain back to config if it was updated
+if [[ "$MAIN_DOMAIN" != "$CURRENT_DOMAIN" && "$MAIN_DOMAIN" != "example.com" ]]; then
+    if grep -q "^DOMAIN=" "$CONFIG" 2>/dev/null; then
+        sed -i "s/^DOMAIN=.*/DOMAIN=$MAIN_DOMAIN/" "$CONFIG"
+    else
+        echo "DOMAIN=$MAIN_DOMAIN" >> "$CONFIG"
+    fi
+fi
 
 {
     printf 'NS_HOST="%s"\n' "$TARGET_TUNNEL"
@@ -271,7 +284,7 @@ fi
 
 validate_keypair || key_fail "keypair invalid after service start"
 PUB_KEY=$(tr -d ' \n\r\t' < "$DNS_DIR/server.pub")
-check_ns_hint "$TARGET_TUNNEL"
+check_ns_hint "$TARGET_TUNNEL" "$MAIN_DOMAIN"
 
 echo ""
 echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
@@ -279,6 +292,7 @@ echo -e " ${GREEN}✓ SlowDNS Core Engine Installed & Running${NC}"
 echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
 echo -e "  Bind            : ${YELLOW}${LISTEN_ADDR}:${LISTEN_PORT}${NC}"
 echo -e "  Backend         : ${YELLOW}${SSH_BACKEND}${NC} (Dropbear/SSH)"
+echo -e "  Main Domain     : ${GREEN}${MAIN_DOMAIN}${NC}"
 echo -e "  Tunnel NS       : ${GREEN}${TARGET_TUNNEL}${NC}"
 echo -e "  Public Key      : ${YELLOW}${PUB_KEY}${NC}"
 echo -e "${CYAN}════════════════════════════════════════════════════════${NC}"
