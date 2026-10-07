@@ -560,6 +560,7 @@ P53_SLOWDNS_PORT=5300
 P53_UDPC_PORT=7300
 P53_HY_PORT=4430
 P53_OBFS_TAG='#AFTERLIFE-OBFS# '
+P53_OBFS_SECRET=$P53_BASE/hysteria-obfs.secret
 
 p53_kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | tr -d "\"'"; }
 
@@ -607,13 +608,30 @@ p53_hy_obfs_off() {
 p53_hy_obfs_on() {
     [[ -f "$P53_HY_CFG" ]] || return 0
 
-    # Remove any existing obfs block first
+    local secret current tmp
+    current=$(awk '/salamander:/{f=1} f && /password:/{print $2; exit}' "$P53_HY_CFG" 2>/dev/null | tr -d "\"' ")
+
+    if [[ -n "$current" ]]; then
+        secret="$current"
+    elif [[ -s "$P53_OBFS_SECRET" ]]; then
+        secret=$(tr -d '[:space:]' < "$P53_OBFS_SECRET")
+    else
+        secret=$(openssl rand -hex 16)
+        umask 077
+        printf '%s\n' "$secret" > "$P53_OBFS_SECRET"
+        chmod 600 "$P53_OBFS_SECRET"
+    fi
+
+    # Persist the secret so switching away from and back to Shared HY
+    # does not invalidate previously generated client links.
+    umask 077
+    printf '%s\n' "$secret" > "$P53_OBFS_SECRET"
+    chmod 600 "$P53_OBFS_SECRET"
+
     p53_hy_obfs_off
 
-    local tmp
     tmp=$(mktemp)
-
-    awk '
+    awk -v secret="$secret" '
         BEGIN { inserted=0 }
         /^listen:/ {
             print
@@ -621,7 +639,7 @@ p53_hy_obfs_on() {
                 print "obfs:"
                 print "  type: salamander"
                 print "  salamander:"
-                print "    password: \"AFTERLIFE_OBFS\""
+                print "    password: \"" secret "\""
                 inserted=1
             }
             next
@@ -631,10 +649,9 @@ p53_hy_obfs_on() {
 }
 
 p53_mux_clear() {
-    command -v iptables-legacy >/dev/null 2>&1 || return 0
-    while iptables-legacy -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
-    iptables-legacy -t nat -F "$P53_CHAIN" 2>/dev/null
-    iptables-legacy -t nat -X "$P53_CHAIN" 2>/dev/null
+    while ipt_cmd -t nat -D PREROUTING -p udp --dport 53 -j "$P53_CHAIN" 2>/dev/null; do :; done
+    ipt_cmd -t nat -F "$P53_CHAIN" 2>/dev/null || true
+    ipt_cmd -t nat -X "$P53_CHAIN" 2>/dev/null || true
 }
 
 p53_mux_apply() {
@@ -642,26 +659,26 @@ p53_mux_apply() {
     p53_mux_clear
     [[ $mode == none || $mode == hysteria ]] && return 0
 
-    iptables-legacy -t nat -N "$P53_CHAIN" || return 1
-    iptables-legacy -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
+    ipt_cmd -t nat -N "$P53_CHAIN" || return 1
+    ipt_cmd -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
 
     if [[ $mode == slowdns ]]; then
-        iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
+        ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
     else
         # DNS = < 300 bytes
-        iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 0:300 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
+        ipt_cmd -t nat -A "$P53_CHAIN" -p udp -m length --length 0:300 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
 
         case $mode in
             shared_hy)
                 # Hysteria QUIC = everything else
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
             shared_udp)
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" ;;
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" ;;
             shared_all)
                 # 301-1199 = UDP custom
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 301:1199 -j REDIRECT --to-ports "$P53_UDPC_PORT"
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -m length --length 301:1199 -j REDIRECT --to-ports "$P53_UDPC_PORT"
                 # 1200+ = Hysteria
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
+                ipt_cmd -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
         esac
     fi
 
@@ -715,8 +732,10 @@ p53_set_mode() {
 
         shared_all)
             echo -e "\n  ${YELLOW}[!] Shared ALL disables obfuscation for clean port-53 detection${NC}"
-            read -rp "  Type YES to proceed: " confirm
-            [[ $confirm == YES ]] || return 1
+            if [[ "${P53_RESTORE:-0}" != "1" ]]; then
+                read -rp "  Type YES to proceed: " confirm
+                [[ $confirm == YES ]] || return 1
+            fi
             p53_mux_clear
             p53_hy_obfs_off
             p53_hy_set_listen "$P53_HY_PORT"
@@ -769,7 +788,7 @@ menu_port53() {
             4) echo; p53_set_mode shared_udp; read -rp "  Press enter..." ;;
             5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
             6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
-            7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
+            7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; ipt_cmd -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
             0) break ;;
             *) ;;
         esac
@@ -912,7 +931,12 @@ full_diagnostics() {
 }
 
 case "$1" in
-    --restore-p53)      p53_set_mode "$(p53_kv "$P53_STATE" MODE)"; exit 0 ;;
+    --restore-p53)
+        P53_RESTORE=1
+        restore_mode=$(p53_kv "$P53_STATE" MODE)
+        [[ -n "$restore_mode" && "$restore_mode" != "none" ]] && p53_set_mode "$restore_mode"
+        exit 0
+        ;;
 esac
 
 while true; do
