@@ -578,21 +578,56 @@ p53_hy_set_listen() { [[ -f $P53_HY_CFG ]] && sed -i "s/^listen: .*/listen: :$1/
 p53_hy_obfs_now() { grep -q '^obfs:' "$P53_HY_CFG" 2>/dev/null; }
 
 p53_hy_obfs_off() {
-    [[ -f $P53_HY_CFG ]] && p53_hy_obfs_now || return 0
-    local tmp; tmp=$(mktemp)
-    awk -v tag="$P53_OBFS_TAG" '
-        /^obfs:/                 { inblk=1; print tag $0; next }
-        inblk && /^[^ \t#]/      { inblk=0 }
-        inblk && /^[ \t]+[^ \t]/ { print tag $0; next }
+    [[ -f "$P53_HY_CFG" ]] || return 0
+
+    local tmp
+    tmp=$(mktemp)
+
+    awk '
+        BEGIN { inobfs=0; seen=0 }
+        /^[[:space:]]*obfs:/ {
+            inobfs=1
+            seen=1
+            next
+        }
+        inobfs {
+            if ($0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:/) {
+                if ($0 ~ /^[[:space:]]*type:/ || $0 ~ /^[[:space:]]*salamander:/ || $0 ~ /^[[:space:]]*password:/) {
+                    next
+                }
+                inobfs=0
+            } else {
+                next
+            }
+        }
         { print }
-    ' "$P53_HY_CFG" > "$tmp" && cat "$tmp" > "$P53_HY_CFG"
-    rm -f "$tmp"
+    ' "$P53_HY_CFG" > "$tmp" && mv "$tmp" "$P53_HY_CFG"
 }
 
 p53_hy_obfs_on() {
-    [[ -f $P53_HY_CFG ]] || return 0
-    sed -i "s/^${P53_OBFS_TAG}//" "$P53_HY_CFG"
-    sed -i 's/^#obfs:/obfs:/; s/^#  type: salamander/  type: salamander/; s/^#  salamander:/  salamander/; s/^#    password:/    password:/' "$P53_HY_CFG"
+    [[ -f "$P53_HY_CFG" ]] || return 0
+
+    # Remove any existing obfs block first
+    p53_hy_obfs_off
+
+    local tmp
+    tmp=$(mktemp)
+
+    awk '
+        BEGIN { inserted=0 }
+        /^listen:/ {
+            print
+            if (!inserted) {
+                print "obfs:"
+                print "  type: salamander"
+                print "  salamander:"
+                print "    password: \"AFTERLIFE_OBFS\""
+                inserted=1
+            }
+            next
+        }
+        { print }
+    ' "$P53_HY_CFG" > "$tmp" && mv "$tmp" "$P53_HY_CFG"
 }
 
 p53_mux_clear() {
@@ -613,33 +648,35 @@ p53_mux_apply() {
     if [[ $mode == slowdns ]]; then
         iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
     else
-        # SHARED modes: use packet LENGTH instead of u32 hex inspection
-        # DNS (SlowDNS) = always <300 bytes, Hysteria QUIC = always ≥1200 bytes
+        # DNS = < 300 bytes
         iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 0:300 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
-        
+
         case $mode in
             shared_hy)
-                # Rest of packets (>300 bytes) = Hysteria QUIC
+                # Hysteria QUIC = everything else
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
             shared_udp)
-                # Rest of packets = udp-custom
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" ;;
             shared_all)
-                # If >300 and <1200 = udp-custom, if ≥1200 = Hysteria
+                # 301-1199 = UDP custom
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 301:1199 -j REDIRECT --to-ports "$P53_UDPC_PORT"
+                # 1200+ = Hysteria
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
         esac
     fi
+
     netfilter-persistent save >/dev/null 2>&1
 }
 
 p53_finish() {
     echo "MODE=$1" > "$P53_STATE"
+
     if [[ $1 == hysteria || $1 == shared_hy || $1 == shared_all ]]; then
         echo "PORT=53" > "$P53_HY_TXT"
     else
         echo "PORT=$P53_HY_PORT" > "$P53_HY_TXT"
     fi
+
     systemctl is-active --quiet hysteria || echo -e "  ${RED}[!] Hysteria service issue detected.${NC}"
     echo -e "  ${GREEN}✓ Routing architecture '$1' successfully compiled.${NC}"
 }
@@ -647,40 +684,54 @@ p53_finish() {
 p53_set_mode() {
     local mode=$1 confirm
     p53_load_state
-    
+
     case $mode in
         slowdns)
             p53_mux_clear
-            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            p53_hy_obfs_on
+            p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria dnstt
             p53_mux_apply slowdns
-            p53_finish slowdns ;;
+            p53_finish slowdns
+            ;;
+
         hysteria)
             p53_mux_clear
             systemctl stop dnstt 2>/dev/null
-            p53_hy_obfs_on; p53_hy_set_listen 53
+            p53_hy_obfs_on
+            p53_hy_set_listen 53
             systemctl restart hysteria
-            p53_finish hysteria ;;
+            p53_finish hysteria
+            ;;
+
         shared_hy|shared_udp)
             p53_mux_clear
-            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            p53_hy_obfs_on
+            p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria dnstt
             p53_mux_apply "$mode"
-            p53_finish "$mode" ;;
+            p53_finish "$mode"
+            ;;
+
         shared_all)
-            echo -e "\n  ${YELLOW}[!] EXPERIMENTAL: Shared ALL disables Hysteria Obfuscation (Salamander)${NC}"
+            echo -e "\n  ${YELLOW}[!] Shared ALL disables obfuscation for clean port-53 detection${NC}"
             read -rp "  Type YES to proceed: " confirm
             [[ $confirm == YES ]] || return 1
             p53_mux_clear
-            p53_hy_obfs_off; p53_hy_set_listen "$P53_HY_PORT"
+            p53_hy_obfs_off
+            p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria dnstt
             p53_mux_apply shared_all
-            p53_finish shared_all ;;
+            p53_finish shared_all
+            ;;
+
         reset)
             p53_mux_clear
-            p53_hy_obfs_on; p53_hy_set_listen "$P53_HY_PORT"
+            p53_hy_obfs_on
+            p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria
-            p53_finish none ;;
+            p53_finish none
+            ;;
     esac
 }
 
