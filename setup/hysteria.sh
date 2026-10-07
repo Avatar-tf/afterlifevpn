@@ -97,7 +97,9 @@ while i < len(lines):
     out.append(lines[i]); i += 1
 p.write_text("\n".join(out)+"\n")
 '
-            save_conf backend "$DEFAULT_BACKEND_PORT" n ""
+            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d "\\":\' ")
+            current_port=${current_port#:}
+            save_conf manual "${current_port:-$DEFAULT_BACKEND_PORT}" n ""
             echo -e "${GREEN}Salamander off. Old links without obfs work again.${NC}"
             restart_hy
         fi
@@ -107,7 +109,9 @@ p.write_text("\n".join(out)+"\n")
         if [[ "$a" == "y" || "$a" == "Y" ]]; then
             OBFS=$(openssl rand -hex 8)
             printf '\nobfs:\n  type: salamander\n  salamander:\n    password: %s\n' "$OBFS" >> "$HY_YAML"
-            save_conf 53 53 y "$OBFS"
+            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d "\\":\' ")
+            current_port=${current_port#:}
+            save_conf manual "${current_port:-$DEFAULT_BACKEND_PORT}" y "$OBFS"
             echo -e "${GREEN}Salamander on.${NC}"
             echo -e " Obfs password: ${YELLOW}${OBFS}${NC}"
             echo -e " Add to links: &obfs=salamander&obfs-password=${OBFS}"
@@ -158,7 +162,7 @@ LimitNOFILE=infinity
 [Install]
 WantedBy=multi-user.target
 EOF
-    save_conf 53 53 n ""
+    save_conf backend "$DEFAULT_BACKEND_PORT" n ""
     restart_hy
     echo -e "${GREEN}Installed Hysteria backend on UDP ${DEFAULT_BACKEND_PORT}. Port 53 exposure is controlled by the mux menu.${NC}"
 }
