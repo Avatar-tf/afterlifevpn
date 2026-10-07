@@ -2,7 +2,7 @@
 
 # AFTERLIFE VPN
 
-Multi-protocol VPS panel for **Ubuntu 20.04 / 22.04 / 24.04 LTS**
+Multi-protocol VPS management for **Ubuntu 20.04 / 22.04 / 24.04 LTS**
 
 [github.com/Avatar-tf/afterlifevpn](https://github.com/Avatar-tf/afterlifevpn)
 
@@ -10,246 +10,405 @@ Multi-protocol VPS panel for **Ubuntu 20.04 / 22.04 / 24.04 LTS**
 
 ---
 
-## What you get
+## Overview
 
-| Service | How it is meant to run |
-|---|---|
-| Hysteria 2 | **UDP 53**, password-only `hy2://` links, optional hop `53,20000-40000` |
-| Dropbear SSH | **TCP 109** (SlowDNS target) + HTML banner in `/etc/issue.net` |
-| OpenSSH | TCP 22 (do not replace with Dropbear) |
-| SlowDNS (dnstt) | Listens on UDP **5300**, forwards to Dropbear `127.0.0.1:109` |
-| Xray / SSH-WS / BadVPN | Installed by the main installer. Do not steal UDP 53 from Hysteria |
+AFTERLIFE VPN installs and manages Hysteria 2, SlowDNS/dnstt, SSH/Dropbear, Xray, SSH WebSocket, BadVPN, WireGuard and related services from one menu.
 
-Hysteria client links (IP as host, domain only as SNI):
+The recommended Hysteria + SlowDNS design uses **public UDP 53** as the client-facing port while the services stay on separate internal backend ports:
 
 ```text
-hy2://PASSWORD@SERVER_IP:53?insecure=1&sni=your.domain#user-Hy2
-hy2://PASSWORD@SERVER_IP:53,20000-40000?insecure=1&sni=your.domain#user-Hy2-Hop
+Internet
+   |
+   | UDP 53
+   v
+AFTERLIFE Port 53 Demultiplexer
+   |
+   +-- small DNS/dnstt traffic --> UDP 5300
+   |
+   +-- Hysteria traffic --------> UDP 4430
 ```
+
+In this mode Hysteria does **not** bind directly to UDP 53. The client still connects to UDP 53 because the mux redirects that traffic internally.
 
 ---
 
-## Requirements
+## Recommended system
 
-- Fresh Ubuntu 20.04 / 22.04 / 24.04 and **root**
+- Fresh Ubuntu 24.04 LTS
+- Ubuntu 22.04 and 20.04 are also supported
+- Root access
 - Public IPv4
-- A domain whose **A record** already points at this VPS
-- Open these ports: `22/tcp`, `109/tcp`, `443/tcp`, `53/udp`, `5300/udp`, `20000-40000/udp`
+- A domain already pointing to the VPS
+- UDP 53 allowed by the VPS/cloud firewall
 
-On Azure and some Ubuntu 24 kernels, `iptables` is nft and may print `Incompatible with this kernel`. Use **`iptables-legacy`** for Port 53 mux rules.
+Do not run the installer on a server that already hosts important DNS, web or VPN services unless you understand the port and firewall changes it will make.
 
 ---
 
-## Install order (do not skip)
+## DNS setup before installation
 
-### 1. Point DNS first
+Create an A record for the main hostname:
 
-At Cloudflare (or your DNS host):
-
-- `A` record for the hostname → VPS IPv4
-- Wait until this works:
-
-```bash
-dig +short your.domain
+```text
+Type: A
+Name: vpn
+Target: YOUR_VPS_PUBLIC_IP
 ```
 
-### 2. Install as root
+Example:
+
+```text
+vpn.example.com -> YOUR_VPS_PUBLIC_IP
+```
+
+If Cloudflare is used, keep the record **DNS only** while issuing the certificate.
+
+For SlowDNS/dnstt, the installer also asks for a tunnel nameserver. The default is:
+
+```text
+ns.vpn.example.com
+```
+
+Create the DNS records required by your DNS provider so that the tunnel nameserver ultimately points to the VPS.
+
+---
+
+## Installation
+
+Log in as root and run:
 
 ```bash
 apt update && apt install -y wget curl
 wget -qO install.sh https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/install.sh
 chmod +x install.sh
-sudo ./install.sh
+./install.sh
 ```
 
-Enter the domain when asked. Certificates go to `/etc/afterlifevpn/cert/`.
+The installer asks only for:
 
-### 3. Confirm domain and certs
+1. Main domain
+2. Tunnel nameserver
 
-```bash
-ls /etc/afterlifevpn/cert/fullchain.crt /etc/afterlifevpn/cert/private.key
-cat /usr/local/afterlifevpn/config.conf
-```
+It then performs:
 
-`DOMAIN=` must be your hostname.
+- OS and public-IP preflight checks
+- DNS verification for the main domain
+- TLS certificate issuance
+- Nginx and Xray setup
+- Hysteria backend installation
+- SlowDNS/dnstt installation
+- Dropbear/SSH WebSocket/BadVPN setup
+- Port 53 mux setup
+- Shared HY activation
+- Final service and listener health checks
 
-### 4. Hysteria users (UDP 53)
-
-Do **not** use Hysteria menu **Reinstall / Change Mode** on a working server.
-
-```bash
-menu
-# 3 → Hysteria → 1 Manage Users → Add User
-```
-
-Or:
-
-```bash
-bash /usr/local/afterlifevpn/setup/hysteria-user.sh
-```
-
-Type **username** and **days** only. Password is generated. Test the STANDARD IP link first.
-
-Check:
-
-```bash
-ss -ulnp | grep hysteria
-grep -A3 '^auth:' /etc/hysteria/config.yaml
-```
-
-Need `*:53` and:
-
-```yaml
-auth:
-  type: command
-  command: /etc/hysteria/auth.sh
-```
-
-### 5. Dropbear banner
-
-```bash
-bash /usr/local/afterlifevpn/setup/dropbear.sh
-ps aux | grep '[d]ropbear'
-```
-
-The process must show `-b /etc/issue.net` and keep the port already in use (**109** on the reference design).
-
-Edit the banner later:
-
-```bash
-nano /etc/issue.net
-systemctl restart dropbear
-```
-
-### 6. SlowDNS last (optional)
-
-1. Install `/usr/local/bin/dnstt-server`
-2. Service: UDP `0.0.0.0:5300` → `127.0.0.1:109`
-3. DNS: `NS ns` → `ns.your.domain` and `A ns` → VPS IP
-4. Only then use the Port 53 menu
-
-If `iptables -t nat` fails:
-
-```bash
-iptables-legacy -t nat -L -n
-```
-
-Keep Hysteria on `:53`. Redirect only NS-name DNS queries to `5300`.
+If the domain does not resolve to the VPS public IPv4, installation stops before certificate issuance instead of leaving a half-configured server.
 
 ---
 
-## Menu
+## Default post-install state
 
-```bash
-menu
-```
+A successful fresh install finishes in **Shared HY** mode:
 
 ```text
-1  SSH
-2  Xray
-3  Hysteria 2
-4  WireGuard
-5  L2TP
-6  Subscriptions
-7  BBR
-8  Settings
-9  Backup
-10 Domain
-11 Port 53
-U  Download scripts from GitHub
-V  Diagnostics
-X  Exit
+Public UDP 53
+   |
+   +--> dnstt backend UDP 5300
+   |
+   +--> Hysteria backend UDP 4430
 ```
 
-**U** only replaces files under `/usr/local/afterlifevpn`. It does **not** rewrite yaml, certificates, `/etc/issue.net`, or iptables.
+Hysteria Salamander obfuscation is enabled automatically in Shared HY.
 
-After U, apply a component yourself if needed:
+A unique Salamander secret is generated per server and stored at:
+
+```text
+/usr/local/afterlifevpn/hysteria-obfs.secret
+```
+
+The secret is reused when switching away from Shared HY and back again, so previously generated Shared-HY client links remain valid.
+
+---
+
+## Port 53 modes
+
+Open:
 
 ```bash
-bash /usr/local/afterlifevpn/setup/dropbear.sh
-bash /usr/local/afterlifevpn/setup/hysteria-user.sh
+menu
 ```
 
-Do not run `setup/hysteria.sh` on a live node unless you accept a yaml reset.
+Then choose:
 
----
+```text
+11) Port 53
+```
 
-## Hysteria rules
+Available modes:
 
-| Do | Do not |
+| Mode | Behavior |
 |---|---|
-| Keep `listen: :53` | Move Hysteria to 443 “just to test” |
-| Create users with `hysteria-user.sh` | Rely on a single yaml `password` after users exist |
-| Use `hy2://PASSWORD@IP:53?...` | Use `username:password@` unless you switched to userpass |
-| Toggle Salamander only with the safe `hysteria.sh` | Press Reinstall / Change Mode on a working VPS |
+| SlowDNS only | dnstt uses public UDP 53; Hysteria remains on backend 4430 |
+| Hysteria only | Hysteria binds directly to UDP 53; dnstt is stopped |
+| Shared HY | dnstt + Hysteria share public UDP 53; Salamander ON |
+| Shared UDP | dnstt + UDP Custom share public UDP 53 |
+| Shared ALL | dnstt + UDP Custom + Hysteria share public UDP 53; Hysteria obfs OFF |
+| Reset Engine | Removes mux rules and returns Hysteria to backend mode |
 
-Salamander **off** → short link.  
-Salamander **on** → add `&obfs=salamander&obfs-password=SECRET`.
+### Shared HY — recommended for Hysteria
+
+Shared HY keeps:
+
+```text
+Hysteria backend : UDP 4430
+dnstt backend    : UDP 5300
+Client port      : UDP 53
+Salamander       : ON
+```
+
+Create a **new Hysteria account/link after selecting the desired port-53 mode** so the generated client link contains the correct port and obfuscation settings.
+
+### Shared ALL
+
+Shared ALL uses:
+
+```text
+0-300 byte UDP packets    -> dnstt 5300
+301-1199 byte UDP packets -> UDP Custom 7300
+remaining UDP packets     -> Hysteria 4430
+```
+
+Hysteria Salamander obfuscation is disabled in this mode by design.
 
 ---
 
-## Ports
+## Hysteria 2 users
 
-| Port | Service |
+Open:
+
+```text
+menu
+3) Hysteria 2
+1) Manage Users
+```
+
+Each account receives its own generated password and expiration date.
+
+When Shared HY or Shared ALL is active, generated links use public port 53 even though Hysteria itself is listening on backend 4430.
+
+Example shape:
+
+```text
+hy2://PASSWORD@SERVER_IP:53?insecure=1&sni=your.domain&obfs=salamander&obfs-password=SECRET#user-Hy2
+```
+
+Do not manually change the server listener to 53 just because a generated client link contains `:53`.
+
+---
+
+## SlowDNS / dnstt
+
+dnstt runs on:
+
+```text
+0.0.0.0:5300/udp
+```
+
+and forwards to:
+
+```text
+127.0.0.1:109
+```
+
+where Dropbear provides the SSH backend.
+
+dnstt keys are stored in:
+
+```text
+/etc/afterlifevpn/dns/server.key
+/etc/afterlifevpn/dns/server.pub
+```
+
+The private key is restricted to root.
+
+---
+
+## Important ports
+
+| Port | Purpose |
 |---|---|
 | 22/tcp | OpenSSH |
-| 109/tcp | Dropbear (dnstt backend) |
-| 443/tcp | WS / Xray / TLS |
-| 53/udp | Hysteria 2 |
-| 5300/udp | dnstt-server |
-| 7300 | badvpn-udpgw |
-| 20000-40000/udp | Hysteria hop → 53 |
+| 80/tcp | ACME/certificate issuance |
+| 109/tcp | Dropbear / SlowDNS SSH backend |
+| 443/tcp | Nginx / TLS / Xray |
+| 53/udp | Public Port 53 engine |
+| 4430/udp | Hysteria backend in shared modes |
+| 5300/udp | dnstt backend |
+| 7300/udp | BadVPN / UDP Custom backend |
+| 8443/tcp | Xray Reality |
+| 2048/udp | WireGuard |
+
+Your cloud firewall/security group must allow the public ports you intend to use. For the port-53 feature, **UDP 53** must be allowed.
 
 ---
 
-## Paths
+## Certificates
+
+Certificates are stored at:
+
+```text
+/etc/afterlifevpn/cert/fullchain.crt
+/etc/afterlifevpn/cert/private.key
+```
+
+Permissions:
+
+```text
+fullchain.crt : 644
+private.key   : 600
+```
+
+Certificate tools are available under:
+
+```text
+menu
+10) Domain
+```
+
+When changing the server domain, point the new A record to the VPS first, wait for DNS propagation, issue/install the new certificate, and restart Nginx/Hysteria before generating new client links.
+
+---
+
+## Port 53 traffic counters
+
+To verify the demultiplexer:
+
+```text
+menu
+11) Port 53
+7) View Raw Demux Counters
+```
+
+For a working Hysteria connection in Shared HY, the Hysteria redirect counter should increase.
+
+A working Shared ALL Hysteria connection should similarly increase the redirect to backend UDP 4430.
+
+---
+
+## Reboot persistence
+
+Fresh installs create:
+
+```text
+afterlife-port53.service
+```
+
+This restores the selected Port 53 mode after reboot.
+
+The selected state is stored in:
+
+```text
+/usr/local/afterlifevpn/port53-mode.conf
+```
+
+---
+
+## Useful checks
+
+Service status:
+
+```bash
+systemctl status hysteria --no-pager
+systemctl status dnstt --no-pager
+systemctl status nginx --no-pager
+systemctl status dropbear --no-pager
+```
+
+Listeners:
+
+```bash
+ss -tulnp
+```
+
+Hysteria config:
+
+```bash
+cat /etc/hysteria/config.yaml
+```
+
+Hysteria logs:
+
+```bash
+journalctl -u hysteria -n 50 --no-pager
+```
+
+dnstt logs:
+
+```bash
+journalctl -u dnstt -n 50 --no-pager
+```
+
+---
+
+## Main files
 
 ```text
 /usr/local/afterlifevpn/config.conf
-/usr/local/afterlifevpn/setup/
+/usr/local/afterlifevpn/nameserver.conf
+/usr/local/afterlifevpn/port53-mode.conf
+/usr/local/afterlifevpn/hysteria-obfs.secret
 /usr/local/afterlifevpn/menu/menu.sh
+/usr/local/afterlifevpn/setup/
 /usr/local/afterlifevpn/users/hysteria_users.txt
+
 /etc/afterlifevpn/cert/
+/etc/afterlifevpn/dns/
 /etc/hysteria/config.yaml
 /etc/hysteria/auth.sh
-/etc/issue.net
-/etc/default/dropbear
 ```
 
 ---
 
-## Checks
+## Updating AFTERLIFE
 
-```bash
-systemctl is-active hysteria dropbear
-ss -ulnp | grep -E ':(53|5300)\s'
-ss -tlnp | grep -E ':(109|22|443)\s'
-journalctl -u hysteria -n 20 --no-pager
+Use:
+
+```text
+menu
+U) Update AFTERLIFE
 ```
 
-A working Hysteria client shows `client connected` in that log.
+The updater replaces management/setup scripts but does not intentionally overwrite active certificates or user databases.
+
+After an update, verify the Port 53 counters and create a fresh test Hysteria account before relying on the server in production.
 
 ---
 
-## Pull scripts without the menu
+## Troubleshooting Hysteria on UDP 53
 
-```bash
-BASE=https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main
-ROOT=/usr/local/afterlifevpn
-mkdir -p $ROOT/setup $ROOT/menu
-for f in setup/dropbear.sh setup/hysteria.sh setup/hysteria-user.sh setup/slowdns.sh menu/menu.sh; do
-  wget -q -O $ROOT/$f $BASE/$f && chmod +x $ROOT/$f
-done
+If a Hysteria link works on backend `:4430` but not public `:53`:
+
+1. Confirm the selected Port 53 mode.
+2. Generate a fresh Hysteria link after switching modes.
+3. Check that Hysteria is running.
+4. Check the Port 53 demux counters.
+5. Verify UDP 53 is allowed by the cloud/VPS firewall.
+
+In Shared HY this is the expected state:
+
+```text
+Hysteria bind :4430
+Public link   :53
+Obfs          :salamander ON
 ```
 
-This does not restart services and does not change certificates.
+That is normal and does not mean the generated link is using the wrong port.
 
 ---
 
 ## Support
 
-- Repo: https://github.com/Avatar-tf/afterlifevpn
+- Repository: https://github.com/Avatar-tf/afterlifevpn
 - Telegram: @afterlife005
-- WhatsApp: +234 816 512 9071
 
-For legitimate privacy and administration only. You are responsible for local law.
+Use this project only where permitted by your provider, network policies and local law.
