@@ -247,15 +247,26 @@ echo -e "  Listen            : ${YELLOW}${LISTEN_ADDR}:${LISTEN_PORT}${NC}  (mux
 echo -e "  SSH backend       : ${YELLOW}${SSH_BACKEND}${NC}"
 echo ""
 
-# 1. Ask for Main Domain cleanly
-CURRENT_DOMAIN="${SOURCE_DOMAIN:-example.com}"
-read -r -p "  Enter your Main Domain [$CURRENT_DOMAIN]: " input_domain
-MAIN_DOMAIN="${input_domain:-$CURRENT_DOMAIN}"
+# Optional non-interactive arguments used by install.sh:
+#   slowdns.sh MAIN_DOMAIN TUNNEL_NS
+ARG_MAIN_DOMAIN="${1:-}"
+ARG_TUNNEL_NS="${2:-}"
 
-# 2. Ask for Nameserver Subdomain cleanly (defaulting to ns.domain)
+CURRENT_DOMAIN="${SOURCE_DOMAIN:-example.com}"
+if [[ -n "$ARG_MAIN_DOMAIN" ]]; then
+    MAIN_DOMAIN="$ARG_MAIN_DOMAIN"
+else
+    read -r -p "  Enter your Main Domain [$CURRENT_DOMAIN]: " input_domain
+    MAIN_DOMAIN="${input_domain:-$CURRENT_DOMAIN}"
+fi
+
 DEFAULT_NS="ns.${MAIN_DOMAIN}"
-read -r -p "  Enter your Tunnel Nameserver (NS) [$DEFAULT_NS]: " input_ns
-TARGET_TUNNEL="${input_ns:-$DEFAULT_NS}"
+if [[ -n "$ARG_TUNNEL_NS" ]]; then
+    TARGET_TUNNEL="$ARG_TUNNEL_NS"
+else
+    read -r -p "  Enter your Tunnel Nameserver (NS) [$DEFAULT_NS]: " input_ns
+    TARGET_TUNNEL="${input_ns:-$DEFAULT_NS}"
+fi
 
 # Save the main domain back to config if it was updated
 if [[ "$MAIN_DOMAIN" != "$CURRENT_DOMAIN" && "$MAIN_DOMAIN" != "example.com" ]]; then
@@ -299,4 +310,6 @@ echo -e "${CYAN}═════════════════════�
 echo -e "  ${WHITE}Public UDP/53 is not bound here.${NC}"
 echo -e "  ${YELLOW}Use Option 11 (Port 53 Toggle) to REDIRECT 53 -> ${LISTEN_PORT}.${NC}"
 echo ""
-read -r -p "  Press [Enter] to return..."
+if [[ -t 0 && -z "${ARG_MAIN_DOMAIN:-}" ]]; then
+    read -r -p "  Press [Enter] to return..."
+fi
