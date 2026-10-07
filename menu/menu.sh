@@ -155,7 +155,7 @@ show_dashboard() {
     echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
-    echo -e ""
+    echo ""
 }
 
 # ============================================================================
@@ -220,7 +220,7 @@ create_ssh_user() {
     mkdir -p /usr/local/afterlifevpn/users
     echo "$username|$password|$exp_date|$(date +%Y-%m-%d)|$devices|$quota" >> /usr/local/afterlifevpn/users/ssh_users.txt
     
-    SERVER_HOST="${DOMAIN:-$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "N/A")}"
+    SERVER_HOST="${DOMAIN:-$(curl -s ifconfig.me 2>/dev/null || curl -s icanhazip.com 2>/dev/null || echo "N/A") }"
     WS_PORT=$(cat /usr/local/afterlifevpn/ws-port.conf 2>/dev/null || echo 443)
     
     # Locate SlowDNS Public Key dynamically
@@ -410,9 +410,9 @@ edit_ssh_banner() {
     case $banner_choice in
         1) nano /etc/issue.net; systemctl restart dropbear ssh; ;;
         2) cat > /etc/issue.net <<'EOF'
-════════════════════════════════════════
+═══════════════════════════════════════
         AFTERLIFE VPN Server
-════════════════════════════════════════
+═══════════════════════════════════════
 EOF
            systemctl restart dropbear ssh; ;;
         3) echo "" > /etc/issue.net; systemctl restart dropbear ssh; ;;
@@ -488,9 +488,9 @@ EOF
 )
     local VMESS_LINK="vmess://$(echo -n "$VMESS_JSON" | base64 -w 0)"
     clear
-    echo -e "${CYAN}╭────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "${CYAN}╭─────────────────────────────────────────────────────────┌${NC}"
     echo -e "${CYAN}│${NC}                       ${WHITE}VMESS ACCOUNT CREATED${NC}                        ${CYAN}│${NC}"
-    echo -e "${CYAN}╰────────────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "${CYAN}╰─────────────────────────────────────────────────────────┐${NC}"
     echo -e " ${WHITE}Username${NC}     : ${GREEN}$username${NC}"
     echo -e " ${WHITE}UUID${NC}         : ${GREEN}$UUID${NC}"
     echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
@@ -504,7 +504,7 @@ list_vmess_users() {
     show_header "› Xray › VMess User List"
     if [ ! -f /usr/local/afterlifevpn/users/xray_users.txt ]; then echo -e "  ${YELLOW}No users found${NC}\n"; read -p "  Press enter..."; return; fi
     echo -e "  ${WHITE}Username${NC}     ${WHITE}UUID${NC}                                   ${WHITE}Expires${NC}"
-    echo -e "  ${CYAN}──────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${CYAN}─────────────────────────────────────────────────────────┌${NC}"
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         line=${line//|/:}
@@ -757,7 +757,7 @@ menu_port53() {
         echo -e "  ${GREEN}3)${NC} Shared HY       ${CYAN}- dnstt + Hysteria on 53 ${YELLOW}(obfs ON)${NC}"
         echo -e "  ${GREEN}4)${NC} Shared UDP      ${CYAN}- dnstt + udp-custom on 53${NC}"
         echo -e "  ${GREEN}5)${NC} Shared ALL      ${CYAN}- dnstt + Hysteria + udp-custom on 53 ${RED}(obfs OFF)${NC}"
-        echo -e "  ${CYAN}────────────────────────────────────────────────────────${NC}"
+        echo -e "  ${CYAN}────────────────────────────────────────────────────────╣${NC}"
         echo -e "  ${GREEN}6)${NC} Reset Engine    ${CYAN}- drop mux rules, reset bindings${NC}"
         echo -e "  ${GREEN}7)${NC} View Raw Demux Counters (Traffic Split Verify)\n"
         echo -e "  ${RED}0)${NC} Back\n"
@@ -769,7 +769,7 @@ menu_port53() {
             4) echo; p53_set_mode shared_udp; read -rp "  Press enter..." ;;
             5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
             6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
-            7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; echo; read -rp "  Press enter to return..." ;;
+            7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
             0) break ;;
             *) ;;
         esac
