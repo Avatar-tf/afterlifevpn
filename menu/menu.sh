@@ -606,8 +606,6 @@ p53_mux_apply() {
     local mode=$1
     p53_mux_clear
     [[ $mode == none || $mode == hysteria ]] && return 0
-    
-    modprobe xt_u32 2>/dev/null
 
     iptables-legacy -t nat -N "$P53_CHAIN" || return 1
     iptables-legacy -t nat -I PREROUTING 1 -p udp --dport 53 -j "$P53_CHAIN" || { p53_mux_clear; return 1; }
@@ -615,15 +613,21 @@ p53_mux_apply() {
     if [[ $mode == slowdns ]]; then
         iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
     else
-        iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@2&0xFFFF=0x0100" -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
+        # SHARED modes: use packet LENGTH instead of u32 hex inspection
+        # DNS (SlowDNS) = always <300 bytes, Hysteria QUIC = always ≥1200 bytes
+        iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 0:300 -j REDIRECT --to-ports "$P53_SLOWDNS_PORT"
+        
         case $mode in
             shared_hy)
+                # Rest of packets (>300 bytes) = Hysteria QUIC
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
             shared_udp)
+                # Rest of packets = udp-custom
                 iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" ;;
             shared_all)
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m u32 --u32 "0>>22&0x3C@8>>24&0xF0=0xC0 && 0>>22&0x3C@9=0x00000001" -j REDIRECT --to-ports "$P53_HY_PORT"
-                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_UDPC_PORT" ;;
+                # If >300 and <1200 = udp-custom, if ≥1200 = Hysteria
+                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -m length --length 301:1199 -j REDIRECT --to-ports "$P53_UDPC_PORT"
+                iptables-legacy -t nat -A "$P53_CHAIN" -p udp -j REDIRECT --to-ports "$P53_HY_PORT" ;;
         esac
     fi
     netfilter-persistent save >/dev/null 2>&1
