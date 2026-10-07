@@ -97,7 +97,7 @@ while i < len(lines):
     out.append(lines[i]); i += 1
 p.write_text("\n".join(out)+"\n")
 '
-            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d "\\":\' ")
+            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d '": ')
             current_port=${current_port#:}
             save_conf manual "${current_port:-$DEFAULT_BACKEND_PORT}" n ""
             echo -e "${GREEN}Salamander off. Old links without obfs work again.${NC}"
@@ -109,7 +109,7 @@ p.write_text("\n".join(out)+"\n")
         if [[ "$a" == "y" || "$a" == "Y" ]]; then
             OBFS=$(openssl rand -hex 8)
             printf '\nobfs:\n  type: salamander\n  salamander:\n    password: %s\n' "$OBFS" >> "$HY_YAML"
-            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d "\\":\' ")
+            current_port=$(awk '/^listen:/ {print $2; exit}' "$HY_YAML" | tr -d '": ')
             current_port=${current_port#:}
             save_conf manual "${current_port:-$DEFAULT_BACKEND_PORT}" y "$OBFS"
             echo -e "${GREEN}Salamander on.${NC}"
