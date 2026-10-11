@@ -668,7 +668,25 @@ p53_mux_apply() {
     netfilter-persistent save >/dev/null 2>&1
 }
 
+p53_sync_hop() {
+    local dest="$P53_HY_PORT" chain=AFTERLIFE_HOP
+    [[ "$1" == hysteria ]] && dest=53
+    command -v iptables-legacy >/dev/null 2>&1 || return 1
+    # Use the existing hopping chain, including after a mode transition.
+    iptables-legacy -t nat -N "$chain" 2>/dev/null || true
+    iptables-legacy -t nat -F "$chain" || return 1
+    while iptables-legacy -t nat -D PREROUTING -p udp -m multiport --dports 20000:40000 -j "$chain" 2>/dev/null; do :; done
+    if [[ -f "$P53_BASE/port-hop.enabled" ]]; then
+        iptables-legacy -t nat -A "$chain" -p udp -j REDIRECT --to-ports "$dest" || return 1
+        iptables-legacy -t nat -A PREROUTING -p udp -m multiport --dports 20000:40000 -j "$chain" || return 1
+    fi
+    netfilter-persistent save >/dev/null 2>&1 || true
+}
+
 p53_finish() {
+    if ! p53_sync_hop "$1"; then
+        echo -e "  ${RED}[!] Port hopping firewall update failed; verify the NAT rules.${NC}"
+    fi
     echo "MODE=$1" > "$P53_STATE"
 
     if [[ $1 == hysteria || $1 == shared_hy || $1 == shared_all ]]; then
