@@ -560,6 +560,7 @@ P53_SLOWDNS_PORT=5300
 P53_UDPC_PORT=7300
 P53_HY_PORT=4430
 P53_OBFS_TAG='#AFTERLIFE-OBFS# '
+P53_OBFS_SECRET=$P53_BASE/.hysteria-salamander-secret
 
 p53_kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -n1 | tr -d "\"'"; }
 
@@ -579,6 +580,13 @@ p53_hy_obfs_now() { grep -q '^obfs:' "$P53_HY_CFG" 2>/dev/null; }
 
 p53_hy_obfs_off() {
     [[ -f "$P53_HY_CFG" ]] || return 0
+    if p53_hy_obfs_now; then
+        local secret
+        secret=$(sed -n 's/^[[:space:]]*password:[[:space:]]*//p' "$P53_HY_CFG" | head -n1 | tr -d '\"')
+        if [[ -n "$secret" ]]; then
+            (umask 077; printf '%s\\n' "$secret" > "$P53_OBFS_SECRET") || return 1
+        fi
+    fi
 
     local tmp
     tmp=$(mktemp)
@@ -610,7 +618,7 @@ p53_hy_obfs_on() {
     if p53_hy_obfs_now; then return 0; fi
     local secret
     secret=$(sed -n 's/^[[:space:]]*password:[[:space:]]*//p' "$P53_HY_CFG" | head -n1)
-    [[ -z "$secret" ]] && secret=$(sed -n 's/^OBFS_PASSWORD=//p' "$P53_HY_TXT")
+    [[ -z "$secret" ]] && secret=$(cat "$P53_OBFS_SECRET" 2>/dev/null)
     [[ -n "$secret" && "$secret" != "AFTERLIFE_OBFS" ]] || {
         echo "Missing existing Salamander secret; refusing to generate a new one during mode switching."
         return 1
@@ -710,6 +718,7 @@ p53_set_mode() (
     for file in "$P53_STATE" "$P53_HY_TXT"; do
         if [[ -e "$file" ]]; then cp -a "$file" "$backup/$(basename "$file")"; else touch "$backup/absent-$(basename "$file")"; fi
     done
+    if [[ -e "$P53_OBFS_SECRET" ]]; then cp -a "$P53_OBFS_SECRET" "$backup/salamander-secret"; else touch "$backup/absent-salamander-secret"; fi
     iptables-legacy-save -t nat > "$backup/nat.rules" || exit 1
     old_hy=$(systemctl is-active hysteria); old_dns=$(systemctl is-active dnstt)
     p53_rollback() {
@@ -719,6 +728,7 @@ p53_set_mode() (
         for file in "$P53_STATE" "$P53_HY_TXT"; do
             if [[ -f "$backup/absent-$(basename "$file")" ]]; then rm -f "$file"; else cp -a "$backup/$(basename "$file")" "$file"; fi
         done
+        if [[ -f "$backup/absent-salamander-secret" ]]; then rm -f "$P53_OBFS_SECRET"; else cp -a "$backup/salamander-secret" "$P53_OBFS_SECRET"; fi
         iptables-legacy-restore -T nat < "$backup/nat.rules" || echo "WARNING: manual NAT recovery required from $backup/nat.rules"
         if [[ "$old_hy" == active ]]; then systemctl restart hysteria; else systemctl stop hysteria; fi
         if [[ "$old_dns" == active ]]; then systemctl restart dnstt; else systemctl stop dnstt; fi
