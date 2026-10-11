@@ -605,29 +605,19 @@ p53_hy_obfs_off() {
 }
 
 p53_hy_obfs_on() {
-    [[ -f "$P53_HY_CFG" ]] || return 0
-
-    # Remove any existing obfs block first
-    p53_hy_obfs_off
-
-    local tmp
-    tmp=$(mktemp)
-
-    awk '
-        BEGIN { inserted=0 }
-        /^listen:/ {
-            print
-            if (!inserted) {
-                print "obfs:"
-                print "  type: salamander"
-                print "  salamander:"
-                print "    password: \"AFTERLIFE_OBFS\""
-                inserted=1
-            }
-            next
-        }
-        { print }
-    ' "$P53_HY_CFG" > "$tmp" && mv "$tmp" "$P53_HY_CFG"
+    [[ -f "$P53_HY_CFG" ]] || return 1
+    # Reuse the original secret instead of silently replacing user credentials.
+    if p53_hy_obfs_now; then return 0; fi
+    local secret
+    secret=$(sed -n 's/^[[:space:]]*password:[[:space:]]*//p' "$P53_HY_CFG" | head -n1)
+    [[ -z "$secret" ]] && secret=$(sed -n 's/^OBFS_PASSWORD=//p' "$P53_HY_TXT")
+    [[ -n "$secret" && "$secret" != "AFTERLIFE_OBFS" ]] || {
+        echo "Missing existing Salamander secret; refusing to generate a new one during mode switching."
+        return 1
+    }
+    # Quote a YAML scalar safely; the installer-generated hex secret is uncomplicated.
+    [[ "$secret" =~ ^[a-zA-Z0-9_-]+$ ]] || return 1
+    printf '\nobfs:\n  type: salamander\n  salamander:\n    password: "%s"\n' "$secret" >> "$P53_HY_CFG"
 }
 
 p53_mux_clear() {
@@ -681,59 +671,93 @@ p53_finish() {
     echo -e "  ${GREEN}✓ Routing architecture '$1' successfully compiled.${NC}"
 }
 
-p53_set_mode() {
-    local mode=$1 confirm
-    p53_load_state
+p53_validate_mode() {
+    local mode=$1 port
+    [[ -s "$P53_HY_CFG" ]] || { echo "Hysteria config missing"; return 1; }
+    port=$(p53_hy_listen)
+    if [[ "$mode" == hysteria ]]; then
+        [[ "$port" == ":53" ]] || return 1
+    else
+        [[ "$port" == ":$P53_HY_PORT" ]] || return 1
+    fi
+    systemctl is-active --quiet hysteria || return 1
+    p53_udp_listening "${port#:}" || return 1
+    if [[ "$mode" == slowdns || "$mode" == shared_hy || "$mode" == shared_udp || "$mode" == shared_all ]]; then
+        systemctl is-active --quiet dnstt || return 1
+        iptables-legacy -t nat -C PREROUTING -p udp --dport 53 -j "$P53_CHAIN" >/dev/null 2>&1 || return 1
+    else
+        ! iptables-legacy -t nat -C PREROUTING -p udp --dport 53 -j "$P53_CHAIN" >/dev/null 2>&1 || return 1
+    fi
+}
 
-    case $mode in
+p53_set_mode() (
+    # Subshell isolates the ERR/EXIT trap from the interactive menu.
+    local mode=$1 confirm backup old_hy old_dns
+    case "$mode" in slowdns|hysteria|shared_hy|shared_udp|shared_all|reset) ;; *) echo "Invalid mode"; exit 1 ;; esac
+    p53_load_state
+    if [[ "$mode" == shared_all ]]; then
+        echo -e "\n  ${YELLOW}[!] Shared ALL disables obfuscation for clean port-53 detection${NC}"
+        read -rp "  Type YES to proceed: " confirm
+        [[ "$confirm" == YES ]] || exit 1
+    fi
+    [[ -f "$P53_HY_CFG" ]] || { echo "Missing Hysteria configuration"; exit 1; }
+    command -v iptables-legacy-save >/dev/null && command -v iptables-legacy-restore >/dev/null || {
+        echo "iptables-legacy backup tools missing"; exit 1;
+    }
+    backup=$(mktemp -d /tmp/afterlife-p53.XXXXXXXX) || exit 1
+    chmod 700 "$backup"
+    cp -a "$P53_HY_CFG" "$backup/config.yaml" || exit 1
+    for file in "$P53_STATE" "$P53_HY_TXT"; do
+        if [[ -e "$file" ]]; then cp -a "$file" "$backup/$(basename "$file")"; else touch "$backup/absent-$(basename "$file")"; fi
+    done
+    iptables-legacy-save -t nat > "$backup/nat.rules" || exit 1
+    old_hy=$(systemctl is-active hysteria); old_dns=$(systemctl is-active dnstt)
+    p53_rollback() {
+        local file
+        echo "Mode change failed; restoring previous Hysteria configuration, firewall, and service states."
+        cp -a "$backup/config.yaml" "$P53_HY_CFG"
+        for file in "$P53_STATE" "$P53_HY_TXT"; do
+            if [[ -f "$backup/absent-$(basename "$file")" ]]; then rm -f "$file"; else cp -a "$backup/$(basename "$file")" "$file"; fi
+        done
+        iptables-legacy-restore -T nat < "$backup/nat.rules" || echo "WARNING: manual NAT recovery required from $backup/nat.rules"
+        if [[ "$old_hy" == active ]]; then systemctl restart hysteria; else systemctl stop hysteria; fi
+        if [[ "$old_dns" == active ]]; then systemctl restart dnstt; else systemctl stop dnstt; fi
+        netfilter-persistent save >/dev/null 2>&1 || true
+        echo "Previous configuration restored. Backup: $backup"
+    }
+    trap 'p53_rollback' ERR
+    set -e
+    p53_mux_clear
+    case "$mode" in
         slowdns)
-            p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
-            p53_mux_apply slowdns
-            p53_finish slowdns
-            ;;
-
+            systemctl restart hysteria dnstt ;;
         hysteria)
-            p53_mux_clear
-            systemctl stop dnstt 2>/dev/null
+            systemctl stop dnstt
             p53_hy_obfs_on
             p53_hy_set_listen 53
-            systemctl restart hysteria
-            p53_finish hysteria
-            ;;
-
+            systemctl restart hysteria ;;
         shared_hy|shared_udp)
-            p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
-            p53_mux_apply "$mode"
-            p53_finish "$mode"
-            ;;
-
+            systemctl restart hysteria dnstt ;;
         shared_all)
-            echo -e "\n  ${YELLOW}[!] Shared ALL disables obfuscation for clean port-53 detection${NC}"
-            read -rp "  Type YES to proceed: " confirm
-            [[ $confirm == YES ]] || return 1
-            p53_mux_clear
             p53_hy_obfs_off
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
-            p53_mux_apply shared_all
-            p53_finish shared_all
-            ;;
-
+            systemctl restart hysteria dnstt ;;
         reset)
-            p53_mux_clear
-            p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria
-            p53_finish none
-            ;;
+            systemctl restart hysteria ;;
     esac
-}
+    case "$mode" in reset) p53_mux_apply none ;; *) p53_mux_apply "$mode" ;; esac
+    case "$mode" in reset) p53_validate_mode none ;; *) p53_validate_mode "$mode" ;; esac
+    case "$mode" in reset) p53_finish none ;; *) p53_finish "$mode" ;; esac
+    netfilter-persistent save >/dev/null 2>&1 || true
+    trap - ERR
+    rm -rf "$backup"
+    echo "Mode switch validated successfully."
+)
 
 menu_port53() {
     local opt
