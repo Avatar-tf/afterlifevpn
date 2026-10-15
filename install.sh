@@ -284,7 +284,7 @@ iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 443 2>/de
 netfilter-persistent save 2>/dev/null || true
 
 echo -e "\e[1;33m[7/8] Pulling Scripts from GitHub...\e[0m"
-REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/test/azure-qr-hop-install"
 
 wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
