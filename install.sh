@@ -7,60 +7,52 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+clear
+printf '\n====================================================\n'
+printf '           WELCOME TO AFTERLIFE VPN\n'
+printf '====================================================\n'
+printf 'Primary domain is required; SlowDNS hostname is optional.\n'
 DOMAIN=${1:-}
-if [[ -z "$DOMAIN" ]]; then
-    read -r -p "Enter your domain (leave blank to configure TLS later): " DOMAIN
-fi
-if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
-    echo "Invalid domain name"; exit 1
-fi
-
-echo -e "\\e[1;33m[1/8] Updating System & Installing Dependencies...\\e[0m"
+while [[ -z "$DOMAIN" ]]; do
+  read -r -p "Enter your main domain: " DOMAIN
+done
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "Invalid domain"; exit 1; }
+read -r -p "Enter SlowDNS nameserver/subdomain (optional, Enter to skip): " NS_HOST
+[[ -z "$NS_HOST" || "$NS_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "Invalid nameserver"; exit 1; }
+echo "[1/8] Installing dependencies..."
 apt-get update -y || exit 1
 apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools dnsutils openssl || exit 1
 mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data} /etc/afterlifevpn/cert
-printf 'DOMAIN=%q\\n' "$DOMAIN" > /usr/local/afterlifevpn/config.conf
-echo "8880" > /usr/local/afterlifevpn/ws-port.conf
-
-TLS_READY=0
-echo -e "\\e[1;33m[2/8] Checking SSL certificate...\\e[0m"
-if [[ -n "$DOMAIN" ]]; then
-    if [[ ! -s /etc/afterlifevpn/cert/fullchain.crt || ! -s /etc/afterlifevpn/cert/private.key ]]; then
-        echo "Requesting certificate; no custom nameserver is required, but the domain A record must reach this VPS."
-        if [[ ! -x /root/.acme.sh/acme.sh ]]; then
-            curl -fsSL https://get.acme.sh | sh || echo "ACME installation failed."
-        fi
-        if [[ -x /root/.acme.sh/acme.sh ]]; then
-            nginx_was_active=0
-            systemctl is-active --quiet nginx && nginx_was_active=1
-            systemctl stop nginx 2>/dev/null || true
-            /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force &&
-            /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \\
-                --fullchain-file /etc/afterlifevpn/cert/fullchain.crt \\
-                --key-file /etc/afterlifevpn/cert/private.key ||
-                echo "Certificate issuance failed. Configure DNS/Azure port 80 then use Domain > Renew SSL."
-            [[ "$nginx_was_active" == 1 ]] && systemctl start nginx || true
-        fi
-    fi
-    if [[ -s /etc/afterlifevpn/cert/fullchain.crt && -s /etc/afterlifevpn/cert/private.key ]] &&
-        openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -checkend 86400 >/dev/null 2>&1; then
-        TLS_READY=1
-    fi
-fi
-if [[ "$TLS_READY" != 1 ]]; then
-    echo "Issuing a TEMPORARY SELF-SIGNED certificate so services can install without configured DNS."
-    openssl req -x509 -nodes -newkey rsa:2048 -days 14 \
-       -keyout /etc/afterlifevpn/cert/private.key \
-       -out /etc/afterlifevpn/cert/fullchain.crt \
-       -subj "/CN=${DOMAIN:-afterlife.local}" || exit 1
-    chmod 600 /etc/afterlifevpn/cert/private.key
-    chmod 644 /etc/afterlifevpn/cert/fullchain.crt
-    touch /etc/afterlifevpn/cert/SELF_SIGNED_BOOTSTRAP
-    TLS_READY=1
-    echo "WARNING: Certificate is self-signed. Install a valid certificate in Domain management before normal TLS use."
+printf 'DOMAIN=%q\n' "$DOMAIN" > /usr/local/afterlifevpn/config.conf
+echo 8880 > /usr/local/afterlifevpn/ws-port.conf
+if [[ -n "$NS_HOST" ]]; then
+  PUB_IP=$(curl -4fsS --max-time 8 https://api.ipify.org || true)
+  printf 'NS_HOST=%q\nNS_DOMAIN=%q\nNS_IP=%q\n' "$NS_HOST" "$NS_HOST" "$PUB_IP" > /usr/local/afterlifevpn/nameserver.conf
+  echo "Saved nameserver locally. Configure relevant DNS records at your provider."
 else
-    rm -f /etc/afterlifevpn/cert/SELF_SIGNED_BOOTSTRAP
+  echo "No nameserver provided; add it later in Domain management."
 fi
+echo "[2/8] Issuing TLS certificate for $DOMAIN..."
+if [[ ! -x /root/.acme.sh/acme.sh ]]; then
+  curl -fsSL https://get.acme.sh | sh || exit 1
+fi
+nginx_was_active=0
+systemctl is-active --quiet nginx && nginx_was_active=1
+systemctl stop nginx 2>/dev/null || true
+if ! /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force; then
+  echo "TLS issuance failed. Check DNS A record and Azure inbound TCP/80."
+  [[ "$nginx_was_active" == 1 ]] && systemctl start nginx
+  exit 1
+fi
+if ! /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+  --fullchain-file /etc/afterlifevpn/cert/fullchain.crt \
+  --key-file /etc/afterlifevpn/cert/private.key; then
+  echo "TLS installation failed"; exit 1
+fi
+openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -checkend 86400 >/dev/null 2>&1 || { echo "Invalid cert"; exit 1; }
+chmod 600 /etc/afterlifevpn/cert/private.key
+[[ "$nginx_was_active" == 1 ]] && systemctl start nginx
+TLS_READY=1
 
 echo -e "\e[1;33m[3/8] Configuring Nginx Reverse Proxy (Improved)...\e[0m"
 
