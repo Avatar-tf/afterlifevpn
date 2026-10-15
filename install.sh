@@ -7,32 +7,49 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-DOMAIN=$1
+DOMAIN=${1:-}
 if [[ -z "$DOMAIN" ]]; then
-    read -p "Enter your domain (e.g., tech.itzdajohn.online): " DOMAIN
+    read -r -p "Enter your domain (leave blank to configure TLS later): " DOMAIN
 fi
-if [[ -z "$DOMAIN" ]]; then
-    echo "Domain is required for SSL generation. Exiting."
-    exit 1
+if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "Invalid domain name"; exit 1
 fi
 
-echo -e "\e[1;33m[1/8] Updating System & Installing Dependencies...\e[0m"
-apt-get update -y && apt-get upgrade -y
-apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools
-
-mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
-mkdir -p /etc/afterlifevpn/cert
-echo "DOMAIN=$DOMAIN" > /usr/local/afterlifevpn/config.conf
+echo -e "\\e[1;33m[1/8] Updating System & Installing Dependencies...\\e[0m"
+apt-get update -y || exit 1
+apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools dnsutils openssl || exit 1
+mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data} /etc/afterlifevpn/cert
+printf 'DOMAIN=%q\\n' "$DOMAIN" > /usr/local/afterlifevpn/config.conf
 echo "8880" > /usr/local/afterlifevpn/ws-port.conf
 
-echo -e "\e[1;33m[2/8] Generating SSL Certificates...\e[0m"
-curl https://get.acme.sh | sh
-~/.acme.sh/acme.sh --register-account -m admin@$DOMAIN
-~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone --force
-~/.acme.sh/acme.sh --installcert -d $DOMAIN \
-    --fullchainpath /etc/afterlifevpn/cert/fullchain.crt \
-    --keypath /etc/afterlifevpn/cert/private.key
-chmod 644 /etc/afterlifevpn/cert/*
+TLS_READY=0
+echo -e "\\e[1;33m[2/8] Checking SSL certificate...\\e[0m"
+if [[ -n "$DOMAIN" ]]; then
+    if [[ ! -s /etc/afterlifevpn/cert/fullchain.crt || ! -s /etc/afterlifevpn/cert/private.key ]]; then
+        echo "Requesting certificate; no custom nameserver is required, but the domain A record must reach this VPS."
+        if [[ ! -x /root/.acme.sh/acme.sh ]]; then
+            curl -fsSL https://get.acme.sh | sh || echo "ACME installation failed."
+        fi
+        if [[ -x /root/.acme.sh/acme.sh ]]; then
+            nginx_was_active=0
+            systemctl is-active --quiet nginx && nginx_was_active=1
+            systemctl stop nginx 2>/dev/null || true
+            /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force &&
+            /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \\
+                --fullchain-file /etc/afterlifevpn/cert/fullchain.crt \\
+                --key-file /etc/afterlifevpn/cert/private.key ||
+                echo "Certificate issuance failed. Configure DNS/Azure port 80 then use Domain > Renew SSL."
+            [[ "$nginx_was_active" == 1 ]] && systemctl start nginx || true
+        fi
+    fi
+    if [[ -s /etc/afterlifevpn/cert/fullchain.crt && -s /etc/afterlifevpn/cert/private.key ]] &&
+        openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -checkend 86400 >/dev/null 2>&1; then
+        TLS_READY=1
+    fi
+fi
+if [[ "$TLS_READY" != 1 ]]; then
+    echo "TLS unavailable. Core panel installation continues; TLS-dependent services are deferred."
+fi
 
 echo -e "\e[1;33m[3/8] Configuring Nginx Reverse Proxy (Improved)...\e[0m"
 
@@ -241,8 +258,12 @@ masquerade:
     rewriteHost: true
 EOF
 
-systemctl enable hysteria-server.service
-systemctl restart hysteria-server.service
+if [[ "$TLS_READY" == 1 ]]; then
+    systemctl enable hysteria-server.service
+    systemctl restart hysteria-server.service || echo "Hysteria startup failed; check journalctl -u hysteria-server"
+else
+    systemctl disable --now hysteria-server.service 2>/dev/null || true
+fi
 
 echo -e "\e[1;33m[6/8] Configuring Dropbear, BadVPN, WireGuard & Ports...\e[0m"
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/g' /etc/default/dropbear
@@ -280,7 +301,7 @@ EOF
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
 
-iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 443 2>/dev/null || true
+# Port 53 is managed later from the menu; never install a conflicting redirect here.
 netfilter-persistent save 2>/dev/null || true
 
 echo -e "\e[1;33m[7/8] Pulling Scripts from GitHub...\e[0m"
@@ -288,7 +309,7 @@ REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/test/azure-qr-hop
 
 wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"\nwget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh         "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh         "$REPO/setup/dante.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-add-vless.sh "$REPO/setup/xray-add-vless.sh"
