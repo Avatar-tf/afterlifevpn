@@ -40,6 +40,10 @@ On Azure and some Ubuntu 24 kernels, `iptables` is nft and may print `Incompatib
 
 ---
 
+## Azure test branch (not yet merged)
+
+This branch uses the QR-code and hopping changes proposed in PR #3. Its installer and menu updater fetch from `test/azure-qr-hop-install` instead of `main` during testing. Do not merge these testing-only branch URLs into main without replacing them.
+
 ## Install order (do not skip)
 
 ### 1. Point DNS first
@@ -57,7 +61,7 @@ dig +short your.domain
 
 ```bash
 apt update && apt install -y wget curl
-wget -qO install.sh https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/install.sh
+wget -qO install.sh https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/test/azure-qr-hop-install/install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
@@ -234,7 +238,7 @@ A working Hysteria client shows `client connected` in that log.
 ## Pull scripts without the menu
 
 ```bash
-BASE=https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main
+BASE=https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/test/azure-qr-hop-install
 ROOT=/usr/local/afterlifevpn
 mkdir -p $ROOT/setup $ROOT/menu
 for f in setup/dropbear.sh setup/hysteria.sh setup/hysteria-user.sh setup/slowdns.sh menu/menu.sh; do
