@@ -159,6 +159,22 @@ print_one_link() {
     echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${tag}"
 }
 
+print_qr_link() {
+    local link="$1" label="$2"
+    if command -v qrencode >/dev/null 2>&1; then
+        echo -e "${CYAN}$label QR Code${NC}"
+        printf '%s' "$link" | qrencode -t ANSIUTF8 -m 1
+    else
+        echo "QR generation needs the qrencode package."
+    fi
+}
+
+hopping_ready() {
+    [ -f "$HOP_FLAG" ] &&
+    command -v iptables-legacy >/dev/null 2>&1 &&
+    iptables-legacy -t nat -S AFTERLIFE_HOP 2>/dev/null | grep -q 'REDIRECT'
+}
+
 print_hop_link() {
     local pass="$1" hy_port="$2" tag="$3"
     local extra
@@ -188,11 +204,16 @@ generate_links() {
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    print_one_link "$pass" "$hy_port" "${user}-Hy2"
-    if [ -f "$HOP_FLAG" ] && [ "$P53_MODE" = "shared_hy" ]; then
+    local standard_link hop_link
+    standard_link=$(print_one_link "$pass" "$hy_port" "${user}-Hy2")
+    printf '%s\n' "$standard_link"
+    print_qr_link "$standard_link" "Standard"
+    if hopping_ready; then
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
-        print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+        hop_link=$(print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop")
+        printf '%s\n' "$hop_link"
+        print_qr_link "$hop_link" "Hopping"
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
