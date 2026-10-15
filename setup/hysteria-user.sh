@@ -21,6 +21,7 @@ USERS_FILE="/usr/local/afterlifevpn/users/hysteria_users.txt"
 DOMAIN_FILE="/usr/local/afterlifevpn/config.conf"
 PORT53_STATE="/usr/local/afterlifevpn/port53-mode.conf"
 HOP_FLAG="/usr/local/afterlifevpn/port-hop.enabled"
+HOP_CHAIN="AFTERLIFE_HOP"
 HY_YAML="/etc/hysteria/config.yaml"
 AUTH_SH="/etc/hysteria/auth.sh"
 
@@ -159,6 +160,53 @@ print_one_link() {
     echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${tag}"
 }
 
+print_qr() {
+    local link="$1" title="$2"
+    if command -v qrencode >/dev/null 2>&1; then
+        echo -e "${CYAN}$title QR CODE${NC}"
+        printf '%s' "$link" | qrencode -t ANSIUTF8 -m 1
+    else
+        echo -e "${YELLOW}Install qrencode to display QR codes: apt-get install qrencode${NC}"
+    fi
+}
+
+hop_active() {
+    [[ -f "$HOP_FLAG" ]] &&
+    iptables-legacy -t nat -C PREROUTING -p udp -m multiport --dports 20000:40000 -j "$HOP_CHAIN" >/dev/null 2>&1 &&
+    iptables-legacy -t nat -S "$HOP_CHAIN" 2>/dev/null | grep -q -- '--to-ports'
+}
+
+set_hop_rules() {
+    local dest="$PORT"
+    [[ "$P53_MODE" == hysteria ]] && dest=53
+    [[ "$(id -u)" -eq 0 ]] || { echo "Root access required"; return 1; }
+    command -v iptables-legacy >/dev/null || return 1
+    iptables-legacy -t nat -N "$HOP_CHAIN" 2>/dev/null || true
+    iptables-legacy -t nat -F "$HOP_CHAIN" || return 1
+    while iptables-legacy -t nat -D PREROUTING -p udp -m multiport --dports 20000:40000 -j "$HOP_CHAIN" 2>/dev/null; do :; done
+    if [[ -f "$HOP_FLAG" ]]; then
+        iptables-legacy -t nat -A "$HOP_CHAIN" -p udp -j REDIRECT --to-ports "$dest" || return 1
+        iptables-legacy -t nat -A PREROUTING -p udp -m multiport --dports 20000:40000 -j "$HOP_CHAIN" || return 1
+    fi
+    netfilter-persistent save >/dev/null 2>&1 || true
+}
+
+toggle_hop() {
+    local choice
+    if [[ -f "$HOP_FLAG" ]]; then
+        read -r -p "Disable Hysteria hopping? [y/N] " choice
+        [[ "$choice" =~ ^[Yy]$ ]] || return 0
+        rm -f "$HOP_FLAG"
+        if ! set_hop_rules; then touch "$HOP_FLAG"; set_hop_rules; echo "Could not disable hopping"; fi
+    else
+        read -r -p "Enable UDP hopping on 20000-40000? Open range in VPS provider firewall first. [y/N] " choice
+        [[ "$choice" =~ ^[Yy]$ ]] || return 0
+        touch "$HOP_FLAG"
+        if ! set_hop_rules; then rm -f "$HOP_FLAG"; set_hop_rules; echo "Could not enable hopping"; fi
+    fi
+    pause
+}
+
 print_hop_link() {
     local pass="$1" hy_port="$2" tag="$3"
     local extra
@@ -188,11 +236,18 @@ generate_links() {
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    print_one_link "$pass" "$hy_port" "${user}-Hy2"
-    if [ -f "$HOP_FLAG" ] && [ "$P53_MODE" = "shared_hy" ]; then
+    local standard hop
+    standard=$(print_one_link "$pass" "$hy_port" "${user}-Hy2")
+    printf '%s\n' "$standard"
+    print_qr "$standard" "Standard"
+    if hop_active; then
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
-        print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+        hop=$(print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop")
+        printf '%s\n' "$hop"
+        print_qr "$hop" "Port-hopping"
+    elif [[ -f "$HOP_FLAG" ]]; then
+        echo -e "${YELLOW}Hopping rules inactive; hop link suppressed.${NC}"
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
@@ -333,14 +388,16 @@ while true; do
     echo -e "  ${GREEN}2)${NC} Delete User"
     echo -e "  ${GREEN}3)${NC} List Users"
     echo -e "  ${GREEN}4)${NC} Show User Link"
+    echo -e "  ${GREEN}5)${NC} Toggle Port Hopping"
     echo -e "  ${RED}0)${NC} Back"
     echo
-    read -r -p "  Select [0-4]: " opt
+    read -r -p "  Select [0-5]: " opt
     case "$opt" in
         1) add_user ;;
         2) delete_user ;;
         3) list_users ;;
         4) show_user_link ;;
-        0|5|q|Q|x|X) exit 0 ;;
+        5) toggle_hop ;;
+        0|q|Q|x|X) exit 0 ;;
     esac
 done
