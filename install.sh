@@ -22,7 +22,7 @@ read -r -p "SlowDNS nameserver hostname (optional; Enter to skip): " NS_HOST
 
 echo -e "\e[1;33m[1/8] Updating System & Installing Dependencies...\e[0m"
 apt-get update -y || exit 1
-apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools git golang-go
+apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools git golang-go || exit 1
 
 mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
 mkdir -p /etc/afterlifevpn/cert
@@ -232,8 +232,8 @@ EOF
 systemctl restart xray
 systemctl enable xray
 
-echo -e "\e[1;33m[5/8] Installing Hysteria 2 (port 36712)...\e[0m"
-bash <(curl -fsSL https://get.hy2.sh/)
+echo -e "\e[1;33m[5/8] Installing Hysteria 2 (port 4430)...\e[0m"
+bash <(curl -fsSL https://get.hy2.sh/) || { echo "Hysteria installer failed"; exit 1; }
 
 mkdir -p /etc/hysteria
 cat > /etc/hysteria/config.yaml <<EOF
@@ -264,7 +264,7 @@ awk -F '|' -v token="$token" '$2 == token && $3 >= strftime("%Y-%m-%d") {print $
 AUTH_SCRIPT
 chmod 700 /etc/hysteria/auth.sh
 systemctl enable hysteria-server.service
-systemctl restart hysteria-server.service
+systemctl restart hysteria-server.service || { journalctl -u hysteria-server -n 20 --no-pager; exit 1; }
 
 echo -e "\e[1;33m[6/8] Configuring Dropbear, BadVPN, WireGuard & Ports...\e[0m"
 sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/g' /etc/default/dropbear
@@ -340,4 +340,4 @@ fi
 
 echo -e "\n\e[0;32m✓ AFTERLIFE VPN Installation Complete!\e[0m"
 echo -e "\e[1;37mType 'menu' or 'afterlife' to launch the dashboard.\e[0m"
-echo -e "\e[1;36mHysteria installed (verify service status before connecting)\e[0m\n"
+echo "Hysteria installed on UDP 4430. Verify with systemctl status hysteria-server."
