@@ -863,7 +863,7 @@ update_script() {
     show_header "› System › Update"
     echo -e "  ${YELLOW}Checking for updates from GitHub...${NC}\n"
 
-    local REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+    local REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/test/azure-qr-hop-install"
     local FILES=(
         "menu/menu.sh"
         "setup/slowdns.sh"
