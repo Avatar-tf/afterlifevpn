@@ -120,17 +120,27 @@ install_dnstt() {
     local tmp
     tmp=$(mktemp -d)
     echo -e "  ${YELLOW}Building official dnstt-server from source...${NC}"
-    if ! git clone --depth 1 "$DNSTT_REPO" "$tmp/dnstt" >/dev/null 2>&1; then
-        rm -rf "$tmp"
-        key_fail "git clone of official dnstt failed. Place a trusted binary at $BIN and re-run."
+    # The official host can respond to ls-remote but reject shallow fetches.
+    # Preserve diagnostic errors; fall back to a normal clone when needed.
+    if ! git clone --depth 1 "$DNSTT_REPO" "$tmp/dnstt"; then
+        echo -e "  ${YELLOW}Shallow clone failed. Retrying full clone from official source...${NC}"
+        rm -rf "$tmp/dnstt"
+        if ! git clone "$DNSTT_REPO" "$tmp/dnstt"; then
+            rm -rf "$tmp"
+            key_fail "Both shallow and full dnstt clones failed. See git errors above."
+        fi
     fi
 
-    (
-        cd "$tmp/dnstt/dnstt-server"
-        go build -trimpath -ldflags="-s -w" -o "$BIN"
-    )
+    if [[ ! -d "$tmp/dnstt/dnstt-server" ]]; then
+        rm -rf "$tmp"
+        key_fail "Official source lacks expected dnstt-server directory."
+    fi
+    if ! (cd "$tmp/dnstt/dnstt-server" && go build -trimpath -ldflags="-s -w" -o "$tmp/dnstt-server"); then
+        rm -rf "$tmp"
+        key_fail "dnstt-server compilation failed. See Go output above."
+    fi
+    install -m 755 "$tmp/dnstt-server" "$BIN" || { rm -rf "$tmp"; key_fail "Cannot install compiled dnstt binary"; }
     rm -rf "$tmp"
-    chmod 755 "$BIN"
     [[ -x "$BIN" ]] || key_fail "build finished but $BIN is not executable"
     echo -e "  ${GREEN}✓ dnstt-server installed to $BIN${NC}"
 }
