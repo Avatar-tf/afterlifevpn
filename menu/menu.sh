@@ -870,7 +870,13 @@ menu_domain() {
                     systemctl start nginx 2>/dev/null || true
                 fi
                 read -p "  Press enter..." ;;
-            2) [[ -f /usr/local/afterlifevpn/setup/add-host.sh ]] && bash /usr/local/afterlifevpn/setup/add-host.sh ;;
+            2)
+                if [[ -s /usr/local/afterlifevpn/setup/add-host.sh ]]; then
+                    bash /usr/local/afterlifevpn/setup/add-host.sh
+                else
+                    echo "Nameserver Manager script is missing; reinstall the manager component."
+                    read -p "  Press enter..."
+                fi ;;
             3) [ -f /etc/afterlifevpn/cert/fullchain.crt ] && openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"; read -p "  Press enter..." ;;
             0) break ;;
         esac
