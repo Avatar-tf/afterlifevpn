@@ -120,9 +120,13 @@ install_dnstt() {
     local tmp
     tmp=$(mktemp -d)
     echo -e "  ${YELLOW}Building official dnstt-server from source...${NC}"
-    if ! git clone --depth 1 "$DNSTT_REPO" "$tmp/dnstt" >/dev/null 2>&1; then
-        rm -rf "$tmp"
-        key_fail "git clone of official dnstt failed. Place a trusted binary at $BIN and re-run."
+    if ! git clone --depth 1 "$DNSTT_REPO" "$tmp/dnstt"; then
+        echo "Shallow clone failed; retrying normal clone..."
+        rm -rf "$tmp/dnstt"
+        if ! git clone "$DNSTT_REPO" "$tmp/dnstt"; then
+            rm -rf "$tmp"
+            key_fail "Both clone methods failed. See Git error above."
+        fi
     fi
 
     (
