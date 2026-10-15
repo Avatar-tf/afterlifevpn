@@ -779,7 +779,8 @@ menu_port53() {
         echo -e "  ${GREEN}6)${NC} Reset Engine    ${CYAN}- drop mux rules, reset bindings${NC}"
         echo -e "  ${GREEN}7)${NC} View Raw Demux Counters (Traffic Split Verify)\n"
         echo -e "  ${RED}0)${NC} Back\n"
-        read -rp "  Select mode [0-7]: " opt
+        echo -e "  ${GREEN}8)${NC} Install / Repair SlowDNS (dnstt)\n"
+        read -rp "  Select mode [0-8]: " opt
         case $opt in
             1) echo; p53_set_mode slowdns;    read -rp "  Press enter..." ;;
             2) echo; p53_set_mode hysteria;   read -rp "  Press enter..." ;;
@@ -788,6 +789,13 @@ menu_port53() {
             5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
             6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
             7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
+            8)
+                if [[ -s /usr/local/afterlifevpn/setup/slowdns.sh ]]; then
+                    bash /usr/local/afterlifevpn/setup/slowdns.sh
+                else
+                    echo "SlowDNS installer missing. Re-download setup/slowdns.sh."
+                fi
+                read -rp "  Press enter..." ;;
             0) break ;;
             *) ;;
         esac
