@@ -48,7 +48,18 @@ if [[ -n "$DOMAIN" ]]; then
     fi
 fi
 if [[ "$TLS_READY" != 1 ]]; then
-    echo "TLS unavailable. Core panel installation continues; TLS-dependent services are deferred."
+    echo "Issuing a TEMPORARY SELF-SIGNED certificate so services can install without configured DNS."
+    openssl req -x509 -nodes -newkey rsa:2048 -days 14 \
+       -keyout /etc/afterlifevpn/cert/private.key \
+       -out /etc/afterlifevpn/cert/fullchain.crt \
+       -subj "/CN=${DOMAIN:-afterlife.local}" || exit 1
+    chmod 600 /etc/afterlifevpn/cert/private.key
+    chmod 644 /etc/afterlifevpn/cert/fullchain.crt
+    touch /etc/afterlifevpn/cert/SELF_SIGNED_BOOTSTRAP
+    TLS_READY=1
+    echo "WARNING: Certificate is self-signed. Install a valid certificate in Domain management before normal TLS use."
+else
+    rm -f /etc/afterlifevpn/cert/SELF_SIGNED_BOOTSTRAP
 fi
 
 echo -e "\e[1;33m[3/8] Configuring Nginx Reverse Proxy (Improved)...\e[0m"
@@ -241,15 +252,15 @@ bash <(curl -fsSL https://get.hy2.sh/)
 
 mkdir -p /etc/hysteria
 cat > /etc/hysteria/config.yaml <<EOF
-listen: :36712
+listen: :4430
 
 tls:
   cert: /etc/afterlifevpn/cert/fullchain.crt
   key: /etc/afterlifevpn/cert/private.key
 
 auth:
-  type: password
-  password: supersecretpassword
+  type: command
+  command: /etc/hysteria/auth.sh
 
 masquerade:
   type: proxy
@@ -259,6 +270,13 @@ masquerade:
 EOF
 
 if [[ "$TLS_READY" == 1 ]]; then
+    cat > /etc/hysteria/auth.sh <<'AUTH_EOF'
+#!/bin/bash
+# Verify password-only Hysteria credentials against locally managed accounts.
+auth="${2:-${1:-}}"
+awk -F "|" -v token="$auth" '{ if ($2==token && $3 >= strftime("%Y-%m-%d")) {print $1; found=1; exit} } END {if(!found) exit 1}' /usr/local/afterlifevpn/users/hysteria_users.txt
+AUTH_EOF
+    chmod 700 /etc/hysteria/auth.sh
     systemctl enable hysteria-server.service
     systemctl restart hysteria-server.service || echo "Hysteria startup failed; check journalctl -u hysteria-server"
 else
