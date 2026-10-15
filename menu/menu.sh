@@ -140,7 +140,7 @@ show_dashboard() {
     echo -e "  ${WHITE}RAM:${NC}  $(create_bar $RAM_PERCENT) ${RAM_PERCENT}% ${CYAN}(${USED_RAM}MB / ${TOTAL_RAM}MB)${NC}"
     echo -e "  ${WHITE}Disk:${NC} $(create_bar $DISK_PERCENT) ${DISK_PERCENT}% ${CYAN}($USED_DISK / $TOTAL_DISK)${NC}"
     echo -e "  ${WHITE}[ Active Services ]${NC}"
-    echo -e "  $(check_service xray) ${WHITE}Xray${NC}   $(check_service nginx) ${WHITE}Nginx${NC}   $(check_service hysteria) ${WHITE}Hysteria2${NC}   $(check_service wg-quick@wg0) ${WHITE}WireGuard${NC}"
+    echo -e "  $(check_service xray) ${WHITE}Xray${NC}   $(check_service nginx) ${WHITE}Nginx${NC}   $(check_service hysteria-server) ${WHITE}Hysteria2${NC}   $(check_service wg-quick@wg0) ${WHITE}WireGuard${NC}"
     echo -e "  $(check_service ssh) ${WHITE}SSH${NC}    $(check_service dropbear) ${WHITE}Dropbear${NC}   $(check_service squid) ${WHITE}Squid${NC}   $(check_service danted) ${WHITE}Dante${NC}"
     local user_count=$(count_users)
     echo -e "  ${WHITE}Registered Clients:${NC} ${GREEN}$user_count${NC} total across protocols"
@@ -677,7 +677,7 @@ p53_finish() {
         echo "PORT=$P53_HY_PORT" > "$P53_HY_TXT"
     fi
 
-    systemctl is-active --quiet hysteria || echo -e "  ${RED}[!] Hysteria service issue detected.${NC}"
+    systemctl is-active --quiet hysteria-server || echo -e "  ${RED}[!] Hysteria service issue detected.${NC}"
     echo -e "  ${GREEN}✓ Routing architecture '$1' successfully compiled.${NC}"
 }
 
@@ -690,7 +690,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply slowdns
             p53_finish slowdns
             ;;
@@ -700,7 +700,7 @@ p53_set_mode() {
             systemctl stop dnstt 2>/dev/null
             p53_hy_obfs_on
             p53_hy_set_listen 53
-            systemctl restart hysteria
+            systemctl restart hysteria-server
             p53_finish hysteria
             ;;
 
@@ -708,7 +708,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply "$mode"
             p53_finish "$mode"
             ;;
@@ -720,7 +720,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_off
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply shared_all
             p53_finish shared_all
             ;;
@@ -729,7 +729,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria
+            systemctl restart hysteria-server
             p53_finish none
             ;;
     esac
@@ -761,7 +761,8 @@ menu_port53() {
         echo -e "  ${GREEN}6)${NC} Reset Engine    ${CYAN}- drop mux rules, reset bindings${NC}"
         echo -e "  ${GREEN}7)${NC} View Raw Demux Counters (Traffic Split Verify)\n"
         echo -e "  ${RED}0)${NC} Back\n"
-        read -rp "  Select mode [0-7]: " opt
+        echo -e "  ${GREEN}8)${NC} Install / Repair SlowDNS (dnstt)\n"
+        read -rp "  Select mode [0-8]: " opt
         case $opt in
             1) echo; p53_set_mode slowdns;    read -rp "  Press enter..." ;;
             2) echo; p53_set_mode hysteria;   read -rp "  Press enter..." ;;
@@ -770,6 +771,13 @@ menu_port53() {
             5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
             6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
             7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
+            8)
+                if [[ -s /usr/local/afterlifevpn/setup/slowdns.sh ]]; then
+                    bash /usr/local/afterlifevpn/setup/slowdns.sh
+                else
+                    echo "Missing SlowDNS installer; reinstall the setup component."
+                fi
+                read -rp "  Press enter..." ;;
             0) break ;;
             *) ;;
         esac
@@ -804,8 +812,8 @@ menu_settings() {
         read -p "  Select option: " settings_option
         case $settings_option in
             1) journalctl --vacuum-time=1d; echo -e "\n  ${GREEN}✓ Logs cleared!${NC}\n"; read -p "  Press enter..." ;;
-            2) journalctl -u hysteria -n 50 --no-pager; read -p "  Press enter..." ;;
-            3) systemctl restart ws-ssh xray hysteria dropbear nginx dnstt 2>/dev/null; echo -e "\n  ${GREEN}✓ Services restarted!${NC}\n"; read -p "  Press enter..." ;;
+            2) journalctl -u hysteria-server -n 50 --no-pager; read -p "  Press enter..." ;;
+            3) systemctl restart ws-ssh xray hysteria-server dropbear nginx dnstt 2>/dev/null; echo -e "\n  ${GREEN}✓ Services restarted!${NC}\n"; read -p "  Press enter..." ;;
             4) check_all_services ;;
             0) break ;;
         esac
@@ -813,7 +821,7 @@ menu_settings() {
 }
 check_all_services() {
     show_header "› Settings › Service Status"
-    for srv in ws-ssh xray hysteria dropbear nginx dnstt; do
+    for srv in ws-ssh xray hysteria-server dropbear nginx dnstt; do
         if systemctl is-active --quiet "$srv"; then
             echo -e "  ${GREEN}●${NC} $srv: ${GREEN}Running${NC}"
         else
@@ -834,7 +842,13 @@ menu_domain() {
         read -p "  Select option: " domain_option
         case $domain_option in
             1) systemctl stop nginx 2>/dev/null; ~/.acme.sh/acme.sh --renew -d "${DOMAIN}" --force; systemctl start nginx 2>/dev/null; read -p "  Press enter..." ;;
-            2) [[ -f /usr/local/afterlifevpn/setup/add-host.sh ]] && bash /usr/local/afterlifevpn/setup/add-host.sh ;;
+            2)
+                if [[ -s /usr/local/afterlifevpn/setup/add-host.sh ]]; then
+                    bash /usr/local/afterlifevpn/setup/add-host.sh
+                else
+                    echo "Nameserver Manager not installed."
+                    read -rp "  Press enter..."
+                fi ;;
             3) [ -f /etc/afterlifevpn/cert/fullchain.crt ] && openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"; read -p "  Press enter..." ;;
             0) break ;;
         esac
@@ -845,7 +859,7 @@ update_script() {
     show_header "› System › Update"
     echo -e "  ${YELLOW}Checking for updates from GitHub...${NC}\n"
 
-    local REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+    local REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/review/main-baseline-fixes"
     local FILES=(
         "menu/menu.sh"
         "setup/slowdns.sh"
