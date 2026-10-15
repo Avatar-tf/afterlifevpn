@@ -851,7 +851,25 @@ menu_domain() {
         echo -e "  ${YELLOW}0)${NC} Back to Main Menu\n"
         read -p "  Select option: " domain_option
         case $domain_option in
-            1) systemctl stop nginx 2>/dev/null; ~/.acme.sh/acme.sh --renew -d "${DOMAIN}" --force; systemctl start nginx 2>/dev/null; read -p "  Press enter..." ;;
+            1)
+                if [[ -z "${DOMAIN:-}" ]]; then
+                    echo "No domain configured. Set your domain first through Nameserver Manager."
+                else
+                    systemctl stop nginx 2>/dev/null || true
+                    if /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force &&
+                       /root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
+                          --fullchain-file /etc/afterlifevpn/cert/fullchain.crt \
+                          --key-file /etc/afterlifevpn/cert/private.key &&
+                       openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -checkend 86400 >/dev/null 2>&1; then
+                        rm -f /etc/afterlifevpn/cert/SELF_SIGNED_BOOTSTRAP
+                        systemctl restart hysteria-server 2>/dev/null || true
+                        echo "Certificate installed. Verify client connectivity."
+                    else
+                        echo "Certificate issuance failed; prior certificate remains only if ACME did not overwrite it."
+                    fi
+                    systemctl start nginx 2>/dev/null || true
+                fi
+                read -p "  Press enter..." ;;
             2) [[ -f /usr/local/afterlifevpn/setup/add-host.sh ]] && bash /usr/local/afterlifevpn/setup/add-host.sh ;;
             3) [ -f /etc/afterlifevpn/cert/fullchain.crt ] && openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -text | grep -E "Subject:|Issuer:|Not Before|Not After"; read -p "  Press enter..." ;;
             0) break ;;
