@@ -339,7 +339,7 @@ def view_server():
         values = []
         info = ["Network interface/counters unavailable."]
     box("SERVER-WIDE BANDWIDTH", info + [""] +
-        table(["INTERFACE", "DOWNLOAD", "UPLOAD", "TOTAL"], values,
+        table(["INTERFACE", "RECEIVED", "SENT", "TOTAL"], values,
               [max(10, INNER // 4), max(10, INNER // 4), max(10, INNER // 4), max(10, INNER // 4)]) +
         ["", "Interface RX/TX are host-wide, not per-user traffic."], Fore.CYAN)
 
