@@ -871,6 +871,7 @@ update_script() {
         "menu/menu.sh"
         "setup/slowdns.sh"
         "setup/user-monitor.sh"
+        "setup/user-monitor.py"
         "setup/add-host.sh"
         "setup/hysteria-user.sh"
         "setup/hysteria.sh"
@@ -917,22 +918,27 @@ update_script() {
 }
 
 run_user_monitor() {
-    local monitor=/usr/local/afterlifevpn/setup/user-monitor.sh
-    if [[ ! -s "$monitor" ]]; then
-        echo "User Monitor is not installed yet. Downloading from AfterlifeVPN main..."
-        local temp
-        temp=$(mktemp) || return 1
-        if curl -fsSL --max-time 25 https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/setup/user-monitor.sh -o "$temp" &&
-           bash -n "$temp" &&
-           install -m 755 "$temp" "$monitor"; then
-            echo "User Monitor installed."
+    local root=/usr/local/afterlifevpn/setup
+    local monitor="$root/user-monitor.sh" module="$root/user-monitor.py"
+    if [[ ! -s "$monitor" || ! -s "$module" ]]; then
+        echo "Downloading missing User Monitor components from AfterlifeVPN main..."
+        local dir
+        dir=$(mktemp -d) || return 1
+        local base=https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/setup
+        if curl -fsSL --max-time 30 "$base/user-monitor.sh" -o "$dir/user-monitor.sh" &&
+           curl -fsSL --max-time 30 "$base/user-monitor.py" -o "$dir/user-monitor.py" &&
+           bash -n "$dir/user-monitor.sh" &&
+           python3 -m py_compile "$dir/user-monitor.py"; then
+            install -m 755 "$dir/user-monitor.sh" "$monitor"
+            install -m 644 "$dir/user-monitor.py" "$module"
+            echo "User Monitor components installed."
         else
-            echo "User Monitor download/validation failed. Existing VPN configuration was not changed."
-            rm -f "$temp"
+            echo "Monitor download or syntax validation failed; VPN settings unchanged."
+            rm -rf "$dir"
             read -r -p "Press Enter to return..." _
             return 1
         fi
-        rm -f "$temp"
+        rm -rf "$dir"
     fi
     bash "$monitor"
 }
