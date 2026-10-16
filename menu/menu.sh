@@ -539,8 +539,8 @@ menu_hysteria() {
         case $sub_opt in
             1) bash /usr/local/afterlifevpn/setup/hysteria-user.sh ;;
             2) bash /usr/local/afterlifevpn/setup/hysteria.sh ;;
-            3) clear; echo -e "\n  ${YELLOW}Hysteria Status:${NC}"; systemctl status hysteria --no-pager -l; echo ""; read -p "  Press [Enter] to return..." ;;
-            4) systemctl restart hysteria; echo -e "\n  ${GREEN}✓ Hysteria restarted${NC}"; sleep 1.5 ;;
+            3) clear; echo -e "\n  ${YELLOW}Hysteria Status:${NC}"; systemctl status hysteria-server --no-pager -l; echo ""; read -p "  Press [Enter] to return..." ;;
+            4) systemctl restart hysteria-server; echo -e "\n  ${GREEN}✓ Hysteria restarted${NC}"; sleep 1.5 ;;
             0) break ;;
             *) continue ;;
         esac
@@ -601,7 +601,7 @@ p53_hy_obfs_off() {
             }
         }
         { print }
-    ' "$P53_HY_CFG" > "$tmp" && mv "$tmp" "$P53_HY_CFG"
+    ' "$P53_HY_CFG" > "$tmp" && install -m 644 "$tmp" "$P53_HY_CFG" && rm -f "$tmp"
 }
 
 p53_hy_obfs_on() {
@@ -627,7 +627,7 @@ p53_hy_obfs_on() {
             next
         }
         { print }
-    ' "$P53_HY_CFG" > "$tmp" && mv "$tmp" "$P53_HY_CFG"
+    ' "$P53_HY_CFG" > "$tmp" && install -m 644 "$tmp" "$P53_HY_CFG" && rm -f "$tmp"
 }
 
 p53_mux_clear() {
@@ -677,7 +677,7 @@ p53_finish() {
         echo "PORT=$P53_HY_PORT" > "$P53_HY_TXT"
     fi
 
-    systemctl is-active --quiet hysteria || echo -e "  ${RED}[!] Hysteria service issue detected.${NC}"
+    systemctl is-active --quiet hysteria-server || echo -e "  ${RED}[!] Hysteria service issue detected.${NC}"
     echo -e "  ${GREEN}✓ Routing architecture '$1' successfully compiled.${NC}"
 }
 
@@ -690,7 +690,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply slowdns
             p53_finish slowdns
             ;;
@@ -700,7 +700,7 @@ p53_set_mode() {
             systemctl stop dnstt 2>/dev/null
             p53_hy_obfs_on
             p53_hy_set_listen 53
-            systemctl restart hysteria
+            systemctl restart hysteria-server
             p53_finish hysteria
             ;;
 
@@ -708,7 +708,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply "$mode"
             p53_finish "$mode"
             ;;
@@ -720,7 +720,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_off
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria dnstt
+            systemctl restart hysteria-server dnstt
             p53_mux_apply shared_all
             p53_finish shared_all
             ;;
@@ -729,7 +729,7 @@ p53_set_mode() {
             p53_mux_clear
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
-            systemctl restart hysteria
+            systemctl restart hysteria-server
             p53_finish none
             ;;
     esac
@@ -761,7 +761,8 @@ menu_port53() {
         echo -e "  ${GREEN}6)${NC} Reset Engine    ${CYAN}- drop mux rules, reset bindings${NC}"
         echo -e "  ${GREEN}7)${NC} View Raw Demux Counters (Traffic Split Verify)\n"
         echo -e "  ${RED}0)${NC} Back\n"
-        read -rp "  Select mode [0-7]: " opt
+        echo -e "  ${GREEN}8)${NC} Install / Repair SlowDNS (dnstt)\n"
+        read -rp "  Select mode [0-8]: " opt
         case $opt in
             1) echo; p53_set_mode slowdns;    read -rp "  Press enter..." ;;
             2) echo; p53_set_mode hysteria;   read -rp "  Press enter..." ;;
@@ -770,6 +771,13 @@ menu_port53() {
             5) echo; p53_set_mode shared_all; read -rp "  Press enter..." ;;
             6) echo; p53_set_mode reset;      read -rp "  Press enter..." ;;
             7) clear; echo -e "${YELLOW}--- Traffic Split Counters ---${NC}\n"; iptables-legacy -t nat -L "$P53_CHAIN" -v -n --line-numbers 2>/dev/null || echo -e "  ${RED}MUX engine not running.${NC}"; read -rp "  Press enter..." ;;
+            8)
+                if [[ -s /usr/local/afterlifevpn/setup/slowdns.sh ]]; then
+                    bash /usr/local/afterlifevpn/setup/slowdns.sh
+                else
+                    echo "SlowDNS installer missing; use U) Update AFTERLIFE to fetch it."
+                fi
+                read -rp "  Press enter..." ;;
             0) break ;;
             *) ;;
         esac
@@ -805,7 +813,7 @@ menu_settings() {
         case $settings_option in
             1) journalctl --vacuum-time=1d; echo -e "\n  ${GREEN}✓ Logs cleared!${NC}\n"; read -p "  Press enter..." ;;
             2) journalctl -u hysteria -n 50 --no-pager; read -p "  Press enter..." ;;
-            3) systemctl restart ws-ssh xray hysteria dropbear nginx dnstt 2>/dev/null; echo -e "\n  ${GREEN}✓ Services restarted!${NC}\n"; read -p "  Press enter..." ;;
+            3) systemctl restart ws-ssh xray hysteria-server dropbear nginx dnstt 2>/dev/null; echo -e "\n  ${GREEN}✓ Services restarted!${NC}\n"; read -p "  Press enter..." ;;
             4) check_all_services ;;
             0) break ;;
         esac
@@ -813,7 +821,7 @@ menu_settings() {
 }
 check_all_services() {
     show_header "› Settings › Service Status"
-    for srv in ws-ssh xray hysteria dropbear nginx dnstt; do
+    for srv in ws-ssh xray hysteria-server dropbear nginx dnstt; do
         if systemctl is-active --quiet "$srv"; then
             echo -e "  ${GREEN}●${NC} $srv: ${GREEN}Running${NC}"
         else
