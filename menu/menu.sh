@@ -154,6 +154,7 @@ show_dashboard() {
     echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN        ${GREEN}10)${NC} Domain & Cert            ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${YELLOW}M)${NC} User Monitor (Read Only)"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
     echo ""
 }
@@ -869,6 +870,7 @@ update_script() {
     local FILES=(
         "menu/menu.sh"
         "setup/slowdns.sh"
+        "setup/user-monitor.sh"
         "setup/add-host.sh"
         "setup/hysteria-user.sh"
         "setup/hysteria.sh"
@@ -914,6 +916,27 @@ update_script() {
     exec /usr/local/afterlifevpn/menu/menu.sh "$@"
 }
 
+run_user_monitor() {
+    local monitor=/usr/local/afterlifevpn/setup/user-monitor.sh
+    if [[ ! -s "$monitor" ]]; then
+        echo "User Monitor is not installed yet. Downloading from AfterlifeVPN main..."
+        local temp
+        temp=$(mktemp) || return 1
+        if curl -fsSL --max-time 25 https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main/setup/user-monitor.sh -o "$temp" &&
+           bash -n "$temp" &&
+           install -m 755 "$temp" "$monitor"; then
+            echo "User Monitor installed."
+        else
+            echo "User Monitor download/validation failed. Existing VPN configuration was not changed."
+            rm -f "$temp"
+            read -r -p "Press Enter to return..." _
+            return 1
+        fi
+        rm -f "$temp"
+    fi
+    bash "$monitor"
+}
+
 full_diagnostics() {
     clear
     get_system_info
@@ -937,7 +960,7 @@ esac
 
 while true; do
     show_dashboard
-    read -p "  Select Option [1-11 / U / V / X]: " option
+    read -p "  Select Option [1-11 / M / U / V / X]: " option
     case $option in
         1) menu_ssh ;;
         2) menu_xray ;;
@@ -950,6 +973,7 @@ while true; do
         9) menu_backup ;;
         10) menu_domain ;;
         11) menu_port53 ;;
+        M|m) run_user_monitor ;;
         U|u) update_script ;;
         V|v) full_diagnostics ;;
         X|x) clear; echo -e "${CYAN}Thank you for using AFTERLIFE VPN!${NC}"; exit 0 ;;
