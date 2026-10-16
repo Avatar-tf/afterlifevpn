@@ -7,7 +7,10 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-DOMAIN=$1
+printf '\n=====================================\n'
+printf '    WELCOME TO AFTERLIFE VPN\n'
+printf '=====================================\n'
+DOMAIN=${1:-}
 if [[ -z "$DOMAIN" ]]; then
     read -p "Enter your domain (e.g., tech.itzdajohn.online): " DOMAIN
 fi
@@ -16,23 +19,36 @@ if [[ -z "$DOMAIN" ]]; then
     exit 1
 fi
 
+read -r -p "SlowDNS nameserver (optional; press Enter to skip): " NS_HOST
+if [[ -n "$NS_HOST" && ! "$NS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then echo "Invalid nameserver hostname"; exit 1; fi
+
 echo -e "\e[1;33m[1/8] Updating System & Installing Dependencies...\e[0m"
-apt-get update -y && apt-get upgrade -y
-apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools
+apt-get update -y || exit 1
+apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools git golang-go || exit 1
 
 mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
 mkdir -p /etc/afterlifevpn/cert
-echo "DOMAIN=$DOMAIN" > /usr/local/afterlifevpn/config.conf
+printf 'DOMAIN=%q\n' "$DOMAIN" > /usr/local/afterlifevpn/config.conf
+if [[ -n "$NS_HOST" ]]; then
+    PUBLIC_IP=$(curl -4fsS --max-time 8 https://api.ipify.org || true)
+    printf 'NS_HOST=%q\nNS_DOMAIN=%q\nNS_IP=%q\n' "$NS_HOST" "$NS_HOST" "$PUBLIC_IP" > /usr/local/afterlifevpn/nameserver.conf
+    echo "SlowDNS hostname saved. Confirm its DNS records with your provider."
+fi
 echo "8880" > /usr/local/afterlifevpn/ws-port.conf
 
 echo -e "\e[1;33m[2/8] Generating SSL Certificates...\e[0m"
-curl https://get.acme.sh | sh
-~/.acme.sh/acme.sh --register-account -m admin@$DOMAIN
-~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone --force
-~/.acme.sh/acme.sh --installcert -d $DOMAIN \
-    --fullchainpath /etc/afterlifevpn/cert/fullchain.crt \
-    --keypath /etc/afterlifevpn/cert/private.key
-chmod 644 /etc/afterlifevpn/cert/*
+curl -fsSL https://get.acme.sh | sh || exit 1
+systemctl stop nginx 2>/dev/null || true
+if ! /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force; then
+    echo "Certificate issuance failed: verify main-domain DNS and inbound TCP 80."
+    exit 1
+fi
+/root/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+    --fullchain-file /etc/afterlifevpn/cert/fullchain.crt \
+    --key-file /etc/afterlifevpn/cert/private.key || exit 1
+openssl x509 -in /etc/afterlifevpn/cert/fullchain.crt -noout -checkend 86400 >/dev/null || exit 1
+chmod 600 /etc/afterlifevpn/cert/private.key
+chmod 644 /etc/afterlifevpn/cert/fullchain.crt
 
 echo -e "\e[1;33m[3/8] Configuring Nginx Reverse Proxy (Improved)...\e[0m"
 
@@ -219,20 +235,20 @@ EOF
 systemctl restart xray
 systemctl enable xray
 
-echo -e "\e[1;33m[5/8] Installing Hysteria 2 (port 36712)...\e[0m"
-bash <(curl -fsSL https://get.hy2.sh/)
+echo -e "\e[1;33m[5/8] Installing Hysteria 2 (port 4430)...\e[0m"
+bash <(curl -fsSL https://get.hy2.sh/) || exit 1
 
 mkdir -p /etc/hysteria
 cat > /etc/hysteria/config.yaml <<EOF
-listen: :36712
+listen: :4430
 
 tls:
   cert: /etc/afterlifevpn/cert/fullchain.crt
   key: /etc/afterlifevpn/cert/private.key
 
 auth:
-  type: password
-  password: supersecretpassword
+  type: command
+  command: /etc/hysteria/auth.sh
 
 masquerade:
   type: proxy
@@ -241,14 +257,51 @@ masquerade:
     rewriteHost: true
 EOF
 
+# Match the original Hysteria user manager's command-based authentication.
+mkdir -p /usr/local/afterlifevpn/users
+touch /usr/local/afterlifevpn/users/hysteria_users.txt
+cat > /etc/hysteria/auth.sh <<'AUTH_SCRIPT'
+#!/usr/bin/env python3
+import sys
+from datetime import datetime
+auth = sys.argv[2] if len(sys.argv) > 2 else (sys.argv[1] if len(sys.argv) > 1 else "")
+username = None
+password = auth
+if ":" in auth:
+    username, password = auth.split(":", 1)
+try:
+    lines = open("/usr/local/afterlifevpn/users/hysteria_users.txt").read().splitlines()
+except OSError:
+    sys.exit(1)
+for line in lines:
+    fields = line.split("|")
+    if len(fields) < 3:
+        continue
+    u, p, expires = fields[:3]
+    if (username is None or u == username) and p == password:
+        try:
+            if datetime.now().date() <= datetime.strptime(expires, "%Y-%m-%d").date():
+                print(u)
+                sys.exit(0)
+        except ValueError:
+            pass
+sys.exit(1)
+AUTH_SCRIPT
+chmod 755 /etc/hysteria/auth.sh
+chmod 644 /etc/hysteria/config.yaml
 systemctl enable hysteria-server.service
-systemctl restart hysteria-server.service
+systemctl restart hysteria-server.service || { journalctl -u hysteria-server -n 25 --no-pager; exit 1; }
 
 echo -e "\e[1;33m[6/8] Configuring Dropbear, BadVPN, WireGuard & Ports...\e[0m"
-sed -i 's/DROPBEAR_PORT=.*/DROPBEAR_PORT=109/g' /etc/default/dropbear
+touch /etc/default/dropbear
+if grep -q '^DROPBEAR_PORT=' /etc/default/dropbear; then
+    sed -i 's/^DROPBEAR_PORT=.*/DROPBEAR_PORT=109/' /etc/default/dropbear
+else
+    echo 'DROPBEAR_PORT=109' >> /etc/default/dropbear
+fi
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/g' /etc/default/dropbear
 grep -q "/bin/false" /etc/shells || echo "/bin/false" >> /etc/shells
-systemctl restart dropbear
+systemctl restart dropbear || { journalctl -u dropbear -n 20 --no-pager; exit 1; }
 
 wget -qO /usr/bin/badvpn-udpgw "https://raw.githubusercontent.com/daybreakersx/premscript/master/badvpn-udpgw64"
 chmod +x /usr/bin/badvpn-udpgw
@@ -280,7 +333,7 @@ EOF
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
 
-iptables -t nat -A PREROUTING -p udp --dport 53 -j REDIRECT --to-ports 443 2>/dev/null || true
+# UDP 53 forwarding is exclusively managed by Option 11.
 netfilter-persistent save 2>/dev/null || true
 
 echo -e "\e[1;33m[7/8] Pulling Scripts from GitHub...\e[0m"
@@ -289,6 +342,8 @@ REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
 wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
+wget -q -O /usr/local/afterlifevpn/setup/slowdns.sh "$REPO/setup/slowdns.sh"
+wget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh         "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh         "$REPO/setup/dante.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-add-vless.sh "$REPO/setup/xray-add-vless.sh"
@@ -316,4 +371,4 @@ fi
 
 echo -e "\n\e[0;32m✓ AFTERLIFE VPN Installation Complete!\e[0m"
 echo -e "\e[1;37mType 'menu' or 'afterlife' to launch the dashboard.\e[0m"
-echo -e "\e[1;36mHysteria is running on port 36712\e[0m\n"
+echo -e "\e[1;36mHysteria configured on port 4430\e[0m\n"
