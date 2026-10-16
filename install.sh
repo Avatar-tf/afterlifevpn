@@ -379,6 +379,16 @@ chmod +x /usr/local/afterlifevpn/setup/*.sh
 bash /usr/local/afterlifevpn/setup/squid.sh
 bash /usr/local/afterlifevpn/setup/dante.sh
 bash /usr/local/afterlifevpn/setup/ssh-ws.sh   # installs the fixed WS-SSH
+# When a nameserver was provided, configure dnstt automatically without
+# reprompting. If skipped, leave SlowDNS for Option 11 > 8.
+if [[ -n "$NS_HOST" ]]; then
+    echo "Installing SlowDNS using the nameserver supplied at startup..."
+    AFTERLIFE_SLOWDNS_AUTO=1 bash /usr/local/afterlifevpn/setup/slowdns.sh || {
+        echo "SlowDNS setup failed. Other services remain installed; see output above."
+        exit 1
+    }
+    systemctl is-active --quiet dnstt || { echo "SlowDNS service failed to start"; exit 1; }
+fi
 
 echo -e "\e[1;33m[8/8] Finalizing Setup & Automation...\e[0m"
 ln -sf /usr/local/afterlifevpn/menu/menu.sh /usr/bin/menu
