@@ -25,6 +25,8 @@ if [[ -n "$NS_HOST" && ! "$NS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then echo "Invalid n
 echo -e "\e[1;33m[1/8] Updating System & Installing Dependencies...\e[0m"
 apt-get update -y || exit 1
 apt-get install -y curl wget jq uuid-runtime qrencode apache2-utils dropbear squid dante-server python3 nginx socat cron wireguard iptables-persistent net-tools git golang-go || exit 1
+# Optional Colorama package. The monitor falls back to ANSI colors if unavailable.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-colorama >/dev/null 2>&1 || true
 
 mkdir -p /usr/local/afterlifevpn/{menu,setup,users,data}
 mkdir -p /etc/afterlifevpn/cert
@@ -385,6 +387,7 @@ wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/slowdns.sh "$REPO/setup/slowdns.sh"
 wget -q -O /usr/local/afterlifevpn/setup/user-monitor.sh "$REPO/setup/user-monitor.sh"
+wget -q -O /usr/local/afterlifevpn/setup/user-monitor.py "$REPO/setup/user-monitor.py"
 wget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh         "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh         "$REPO/setup/dante.sh"
