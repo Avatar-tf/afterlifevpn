@@ -251,15 +251,21 @@ echo -e "  Listen            : ${YELLOW}${LISTEN_ADDR}:${LISTEN_PORT}${NC}  (mux
 echo -e "  SSH backend       : ${YELLOW}${SSH_BACKEND}${NC}"
 echo ""
 
-# 1. Ask for Main Domain cleanly
-CURRENT_DOMAIN="${SOURCE_DOMAIN:-example.com}"
-read -r -p "  Enter your Main Domain [$CURRENT_DOMAIN]: " input_domain
-MAIN_DOMAIN="${input_domain:-$CURRENT_DOMAIN}"
-
-# 2. Ask for Nameserver Subdomain cleanly (defaulting to ns.domain)
-DEFAULT_NS="ns.${MAIN_DOMAIN}"
-read -r -p "  Enter your Tunnel Nameserver (NS) [$DEFAULT_NS]: " input_ns
-TARGET_TUNNEL="${input_ns:-$DEFAULT_NS}"
+# Use already-provided nameserver during unattended fresh installation.
+if [[ "${AFTERLIFE_SLOWDNS_AUTO:-0}" == "1" ]]; then
+    MAIN_DOMAIN="${SOURCE_DOMAIN:-}"
+    TARGET_TUNNEL="${NS_HOST:-}"
+    [[ -n "$MAIN_DOMAIN" && -n "$TARGET_TUNNEL" ]] || key_fail "Fresh setup requires saved main domain and NS host."
+    echo "  Using saved domain: $MAIN_DOMAIN"
+    echo "  Using saved nameserver: $TARGET_TUNNEL"
+else
+    CURRENT_DOMAIN="${SOURCE_DOMAIN:-example.com}"
+    read -r -p "  Enter your Main Domain [$CURRENT_DOMAIN]: " input_domain
+    MAIN_DOMAIN="${input_domain:-$CURRENT_DOMAIN}"
+    DEFAULT_NS="${NS_HOST:-ns.${MAIN_DOMAIN}}"
+    read -r -p "  Enter your Tunnel Nameserver (NS) [$DEFAULT_NS]: " input_ns
+    TARGET_TUNNEL="${input_ns:-$DEFAULT_NS}"
+fi
 
 # Save the main domain back to config if it was updated
 if [[ "$MAIN_DOMAIN" != "$CURRENT_DOMAIN" && "$MAIN_DOMAIN" != "example.com" ]]; then
