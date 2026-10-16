@@ -495,8 +495,20 @@ EOF
     echo -e " ${WHITE}UUID${NC}         : ${GREEN}$UUID${NC}"
     echo -e " ${WHITE}Expired On${NC}   : ${RED}$EXPIRY_DATE${NC}"
     echo -e " ${WHITE}Server${NC}       : ${CYAN}$SERVER_HOST${NC}"
-    echo -e " ⚡ ${WHITE}STANDARD LINK${NC}"
+    echo -e " ${WHITE}Protocol${NC}     : ${CYAN}VMess${NC}"
+    echo -e " ${WHITE}Transport${NC}    : ${CYAN}WebSocket (WS)${NC}"
+    echo -e " ${WHITE}Encryption${NC}   : ${CYAN}TLS via Nginx (WSS)${NC}"
+    echo -e " ${WHITE}Port${NC}         : ${CYAN}443${NC}"
+    echo -e " ${WHITE}WS Path${NC}      : ${CYAN}/vmess${NC}"
+    echo -e " ${WHITE}SNI / WS Host${NC}: ${CYAN}$SERVER_HOST${NC}"
+    echo -e " ⚡ ${WHITE}VMess • WSS / TLS LINK${NC}"
     echo -e "   ${YELLOW}$VMESS_LINK${NC}"
+    if command -v qrencode >/dev/null 2>&1; then
+        echo -e " ${WHITE}SCAN WITH YOUR V2RAY / XRAY CLIENT${NC}"
+        printf '%s' "$VMESS_LINK" | qrencode -t ANSIUTF8 -m 1
+    else
+        echo -e " ${YELLOW}QR code unavailable: install qrencode${NC}"
+    fi
     echo -e "\n ${GREEN}✓ VMess account created successfully!${NC}\n"
     read -p "  Press enter to continue..."
 }
