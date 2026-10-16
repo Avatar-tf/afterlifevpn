@@ -320,6 +320,28 @@ else
 fi
 sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/g' /etc/default/dropbear
 grep -q "/bin/false" /etc/shells || echo "/bin/false" >> /etc/shells
+# SSH authentication banner (Dropbear + OpenSSH).
+# Preserve a user-customized banner on reinstall.
+if [[ ! -e /etc/issue.net ]]; then
+    cat > /etc/issue.net <<'BANNER'
+=======================================
+           AFTERLIFE VPN
+=======================================
+Authorized users only.
+BANNER
+fi
+mkdir -p /etc/systemd/system/dropbear.service.d /etc/ssh/sshd_config.d
+cat > /etc/systemd/system/dropbear.service.d/afterlife-banner.conf <<'DROPBEAR_UNIT'
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/dropbear -EF -p ${DROPBEAR_PORT} -W ${DROPBEAR_RECEIVE_WINDOW} -b /etc/issue.net
+DROPBEAR_UNIT
+printf 'Banner /etc/issue.net\n' > /etc/ssh/sshd_config.d/90-afterlife-banner.conf
+systemctl daemon-reload
+if ! sshd -t; then
+    echo "OpenSSH banner configuration failed validation"; exit 1
+fi
+systemctl reload ssh || true
 systemctl restart dropbear || { journalctl -u dropbear -n 20 --no-pager; exit 1; }
 
 wget -qO /usr/bin/badvpn-udpgw "https://raw.githubusercontent.com/daybreakersx/premscript/master/badvpn-udpgw64"
