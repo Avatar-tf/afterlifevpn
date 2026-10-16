@@ -38,6 +38,7 @@ echo "8880" > /usr/local/afterlifevpn/ws-port.conf
 
 echo -e "\e[1;33m[2/8] Generating SSL Certificates...\e[0m"
 curl -fsSL https://get.acme.sh | sh || exit 1
+/root/.acme.sh/acme.sh --set-default-ca --server letsencrypt || exit 1
 systemctl stop nginx 2>/dev/null || true
 if ! /root/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force; then
     echo "Certificate issuance failed: verify main-domain DNS and inbound TCP 80."
