@@ -378,12 +378,13 @@ systemctl start wg-quick@wg0
 netfilter-persistent save 2>/dev/null || true
 
 echo -e "\e[1;33m[7/8] Pulling Scripts from GitHub...\e[0m"
-REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/feature/monitor-readonly-v1"
 
 wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/slowdns.sh "$REPO/setup/slowdns.sh"
+wget -q -O /usr/local/afterlifevpn/setup/user-monitor.sh "$REPO/setup/user-monitor.sh"
 wget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
 wget -q -O /usr/local/afterlifevpn/setup/squid.sh         "$REPO/setup/squid.sh"
 wget -q -O /usr/local/afterlifevpn/setup/dante.sh         "$REPO/setup/dante.sh"
