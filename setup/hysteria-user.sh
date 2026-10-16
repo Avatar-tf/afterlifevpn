@@ -159,6 +159,13 @@ print_one_link() {
     echo "hy2://${pass}@${IP}:${hy_port}?insecure=1&sni=${HOST}${extra}#${tag}"
 }
 
+print_link_qr() {
+    local link="$1"
+    if command -v qrencode >/dev/null 2>&1; then
+        printf '%s' "$link" | qrencode -t ANSIUTF8 -m 1
+    fi
+}
+
 print_hop_link() {
     local pass="$1" hy_port="$2" tag="$3"
     local extra
@@ -188,11 +195,17 @@ generate_links() {
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo -e "🔗 ${WHITE}STANDARD LINK${NC}"
-    print_one_link "$pass" "$hy_port" "${user}-Hy2"
+    local standard_link
+    standard_link=$(print_one_link "$pass" "$hy_port" "${user}-Hy2")
+    printf '%s\n' "$standard_link"
+    print_link_qr "$standard_link"
     if [ -f "$HOP_FLAG" ] && [ "$P53_MODE" = "shared_hy" ]; then
         echo -e "${CYAN}══════════════════════════════${NC}"
         echo -e "🔀 ${WHITE}PORT-HOPPING LINK${NC}"
-        print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop"
+        local hop_link
+        hop_link=$(print_hop_link "$pass" "$hy_port" "${user}-Hy2-Hop")
+        printf '%s\n' "$hop_link"
+        print_link_qr "$hop_link"
     fi
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
 }
