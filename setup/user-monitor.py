@@ -151,30 +151,36 @@ def ssh_sockets():
     # They reset at connection close and must never be called lifetime usage.
     output = run("ss", "-Htinp", "state", "established", timeout=7)
     sockets = []
+    current = None
     for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             continue
-        parts = stripped.split()
-        if len(parts) >= 4:
+        stripped = line.strip()
+        # ss prints one unindented socket row followed by indented TCP metrics.
+        if line[0] not in " \t":
+            current = None
+            parts = stripped.split()
+            if len(parts) < 4:
+                continue
             local_ip, port = parse_address(parts[2])
             remote_ip, _ = parse_address(parts[3])
             if port in ("22", "109") and remote_ip:
                 pid_match = re.search(r"pid=(\d+)", stripped)
-                sockets.append({
+                current = {
                     "type": "SSH" if port == "22" else "Dropbear",
                     "ip": remote_ip,
                     "pid": pid_match.group(1) if pid_match else None,
                     "rx": None, "tx": None,
-                })
-                continue
-        if sockets and re.search(r"bytes_(?:received|acked|sent):", stripped):
+                }
+                sockets.append(current)
+            continue
+        if current is not None:
             rx = re.search(r"\bbytes_received:(\d+)", stripped)
             tx = re.search(r"\bbytes_acked:(\d+)", stripped)
             if rx:
-                sockets[-1]["rx"] = int(rx.group(1))
+                current["rx"] = int(rx.group(1))
             if tx:
-                sockets[-1]["tx"] = int(tx.group(1))
+                current["tx"] = int(tx.group(1))
     return sockets
 
 
