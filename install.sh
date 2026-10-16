@@ -31,7 +31,7 @@ mkdir -p /etc/afterlifevpn/cert
 printf 'DOMAIN=%q\n' "$DOMAIN" > /usr/local/afterlifevpn/config.conf
 if [[ -n "$NS_HOST" ]]; then
     PUBLIC_IP=$(curl -4fsS --max-time 8 https://api.ipify.org || true)
-    printf 'NS_HOST=%q\nNS_DOMAIN=%q\nNS_IP=%q\n' "$NS_HOST" "$NS_HOST" "$PUBLIC_IP" > /usr/local/afterlifevpn/nameserver.conf
+    printf 'NS_HOST="%s"\nNS_DOMAIN="%s"\nNS_IP="%s"\nDOMAIN="%s"\n' "$NS_HOST" "$NS_HOST" "$PUBLIC_IP" "$DOMAIN" > /usr/local/afterlifevpn/nameserver.conf
     echo "SlowDNS hostname saved. Confirm its DNS records with your provider."
 fi
 echo "8880" > /usr/local/afterlifevpn/ws-port.conf
