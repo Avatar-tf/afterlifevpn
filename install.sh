@@ -289,6 +289,14 @@ sys.exit(1)
 AUTH_SCRIPT
 chmod 755 /etc/hysteria/auth.sh
 chmod 644 /etc/hysteria/config.yaml
+# Give the actual service account read-only access to the TLS private key.
+HY_SERVICE_USER=$(systemctl show -p User --value hysteria-server.service 2>/dev/null || true)
+if [[ -n "$HY_SERVICE_USER" && "$HY_SERVICE_USER" != root ]]; then
+    HY_SERVICE_GROUP=$(id -gn "$HY_SERVICE_USER") || exit 1
+    chgrp "$HY_SERVICE_GROUP" /etc/afterlifevpn/cert/private.key
+    chmod 640 /etc/afterlifevpn/cert/private.key
+    chmod 755 /etc/afterlifevpn /etc/afterlifevpn/cert
+fi
 systemctl enable hysteria-server.service
 systemctl restart hysteria-server.service || { journalctl -u hysteria-server -n 25 --no-pager; exit 1; }
 
