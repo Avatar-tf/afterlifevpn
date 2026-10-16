@@ -154,6 +154,7 @@ show_dashboard() {
     echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN        ${GREEN}10)${NC} Domain & Cert            ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${YELLOW}M)${NC} User Monitor (Preview / Read Only)"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
     echo ""
 }
@@ -920,7 +921,7 @@ full_diagnostics() {
     echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║${NC} ${PURPLE}AFTERLIFE VPN Diagnostics                        ${CYAN}║${NC}"
     echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
-    for srv in nginx xray dropbear hysteria dnstt udp-custom; do
+    for srv in nginx xray dropbear hysteria-server dnstt udp-custom; do
         if systemctl is-active --quiet "$srv" 2>/dev/null; then
             echo -e "  ${GREEN}[PASS]${NC} $srv is running"
         else
@@ -937,7 +938,7 @@ esac
 
 while true; do
     show_dashboard
-    read -p "  Select Option [1-11 / U / V / X]: " option
+    read -p "  Select Option [1-11 / M / U / V / X]: " option
     case $option in
         1) menu_ssh ;;
         2) menu_xray ;;
@@ -950,6 +951,7 @@ while true; do
         9) menu_backup ;;
         10) menu_domain ;;
         11) menu_port53 ;;
+        M|m) bash /usr/local/afterlifevpn/setup/user-monitor.sh ;;
         U|u) update_script ;;
         V|v) full_diagnostics ;;
         X|x) clear; echo -e "${CYAN}Thank you for using AFTERLIFE VPN!${NC}"; exit 0 ;;
