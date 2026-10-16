@@ -12,7 +12,7 @@ printf '    WELCOME TO AFTERLIFE VPN\n'
 printf '=====================================\n'
 DOMAIN=${1:-}
 if [[ -z "$DOMAIN" ]]; then
-    read -p "Enter your domain (e.g., tech.itzdajohn.online): " DOMAIN
+    read -p "Enter your domain (e.g., vpn.afterlife.example.com): " DOMAIN
 fi
 if [[ -z "$DOMAIN" ]]; then
     echo "Domain is required for SSL generation. Exiting."
@@ -161,7 +161,11 @@ nginx -t && systemctl restart nginx
 systemctl enable nginx
 
 echo -e "\e[1;33m[4/8] Installing Xray (VMess, VLess, Trojan, Reality, SS2022)...\e[0m"
-bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+XRAY_INSTALLER=$(mktemp)
+curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$XRAY_INSTALLER" || exit 1
+bash "$XRAY_INSTALLER" install || exit 1
+rm -f "$XRAY_INSTALLER"
+command -v xray >/dev/null || { echo "Xray binary missing"; exit 1; }
 
 REALITY_KEYS=$(xray x25519)
 PRIVATE_KEY=$(echo "$REALITY_KEYS" | grep -i "Private" | awk '{print $NF}')
@@ -233,8 +237,13 @@ cat > /usr/local/etc/xray/config.json <<EOF
 }
 EOF
 
-systemctl restart xray
+if ! xray run -test -config /usr/local/etc/xray/config.json; then
+    echo "Xray configuration validation failed; see errors above."
+    exit 1
+fi
+systemctl restart xray || { journalctl -u xray -n 30 --no-pager; exit 1; }
 systemctl enable xray
+systemctl is-active --quiet xray || { journalctl -u xray -n 30 --no-pager; exit 1; }
 
 echo -e "\e[1;33m[5/8] Installing Hysteria 2 (port 4430)...\e[0m"
 bash <(curl -fsSL https://get.hy2.sh/) || exit 1
@@ -300,6 +309,7 @@ if [[ -n "$HY_SERVICE_USER" && "$HY_SERVICE_USER" != root ]]; then
 fi
 systemctl enable hysteria-server.service
 systemctl restart hysteria-server.service || { journalctl -u hysteria-server -n 25 --no-pager; exit 1; }
+systemctl is-active --quiet hysteria-server || { journalctl -u hysteria-server -n 25 --no-pager; exit 1; }
 
 echo -e "\e[1;33m[6/8] Configuring Dropbear, BadVPN, WireGuard & Ports...\e[0m"
 touch /etc/default/dropbear
