@@ -225,7 +225,7 @@ create_ssh_user() {
     
     # Locate SlowDNS Public Key dynamically
     PUB_KEY="Not Installed"
-    for path in /etc/slowdns/server.pub /usr/local/afterlifevpn/server.pub /etc/afterlifevpn/slowdns/server.pub; do
+    for path in /etc/afterlifevpn/dns/server.pub /etc/slowdns/server.pub /usr/local/afterlifevpn/server.pub /etc/afterlifevpn/slowdns/server.pub; do
         if [[ -f "$path" ]]; then
             PUB_KEY=$(cat "$path")
             break
