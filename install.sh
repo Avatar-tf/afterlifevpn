@@ -322,7 +322,7 @@ sed -i 's/DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-p 109"/g' /etc/default/dr
 grep -q "/bin/false" /etc/shells || echo "/bin/false" >> /etc/shells
 # SSH authentication banner (Dropbear + OpenSSH).
 # Preserve a user-customized banner on reinstall.
-if [[ ! -e /etc/issue.net ]]; then
+if [[ ! -s /etc/issue.net ]] || grep -Eq '^(Ubuntu|Debian)( |\\\\n)' /etc/issue.net; then
     cat > /etc/issue.net <<'BANNER'
 =======================================
            AFTERLIFE VPN
