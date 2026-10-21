@@ -803,16 +803,80 @@ menu_port53() {
 menu_wireguard() { show_header "› WireGuard"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
 menu_l2tp() { show_header "› L2TP / IPsec"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
 menu_subscriptions() { show_header "› Subscriptions"; echo -e "  ${YELLOW}Coming Soon!${NC}\n"; read -p "  Press enter..."; }
-menu_bbr() {
-    show_header "› System › TCP BBR Status"
-    local bbr_status=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}' 2>/dev/null)
-    if [[ $bbr_status == "bbr" ]]; then
-        echo -e "  ${GREEN}✓ TCP BBR is ENABLED${NC}"
-    else
-        echo -e "  ${RED}✗ TCP BBR is DISABLED${NC}"
+# TCP BBR requires a kernel that provides tcp_bbr; no external kernel installer.
+AFTERLIFE_BBR_CONF=/etc/sysctl.d/99-afterlife-bbr.conf
+AFTERLIFE_BBR_MODULE=/etc/modules-load.d/afterlife-bbr.conf
+
+bbr_current() {
+    sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown
+}
+bbr_qdisc() {
+    sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown
+}
+bbr_available() {
+    sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw bbr
+}
+bbr_enable() {
+    if ! modprobe tcp_bbr 2>/dev/null || ! bbr_available; then
+        echo -e "  ${RED}✗ This kernel does not provide tcp_bbr. No settings changed.${NC}"
+        echo "  Check: uname -r; modprobe tcp_bbr"
+        return 1
     fi
-    echo ""
-    read -p "  Press enter to continue..."
+    if ! sysctl -w net.core.default_qdisc=fq >/dev/null ||
+       ! sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null; then
+        echo -e "  ${RED}✗ Could not enable BBR at runtime.${NC}"
+        return 1
+    fi
+    # Persist only after successful runtime activation.
+    if ! printf 'net.core.default_qdisc=fq\nnet.ipv4.tcp_congestion_control=bbr\n' > "$AFTERLIFE_BBR_CONF" ||
+       ! printf 'tcp_bbr\n' > "$AFTERLIFE_BBR_MODULE"; then
+        echo -e "  ${RED}✗ BBR active now, but persistence could not be written.${NC}"
+        return 1
+    fi
+    echo -e "  ${GREEN}✓ TCP BBR enabled and saved for reboot.${NC}"
+}
+bbr_disable() {
+    local alg=cubic
+    if ! sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -qw cubic; then
+        alg=reno
+    fi
+    if ! sysctl -w net.ipv4.tcp_congestion_control="$alg" >/dev/null ||
+       ! sysctl -w net.core.default_qdisc=fq_codel >/dev/null; then
+        echo -e "  ${RED}✗ Could not switch away from BBR.${NC}"
+        return 1
+    fi
+    rm -f "$AFTERLIFE_BBR_CONF" "$AFTERLIFE_BBR_MODULE"
+    echo -e "  ${GREEN}✓ BBR disabled; default-like TCP settings restored.${NC}"
+    echo "  Note: a different sysctl configuration may override these after reboot."
+}
+menu_bbr() {
+    local option current
+    while true; do
+        show_header "› System › TCP BBR Manager"
+        current=$(bbr_current)
+        echo -e "  TCP algorithm: ${YELLOW}$current${NC}"
+        echo -e "  Queue discipline: ${YELLOW}$(bbr_qdisc)${NC}"
+        echo -e "  Available algorithms: $(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null)"
+        if [[ "$current" == bbr ]]; then
+            echo -e "  ${GREEN}✓ TCP BBR is ENABLED${NC}"
+        else
+            echo -e "  ${YELLOW}TCP BBR is not enabled${NC}"
+        fi
+        echo ""
+        echo -e "  ${GREEN}1)${NC} Install / Enable BBR (kernel module + persistent settings)"
+        echo -e "  ${GREEN}2)${NC} Disable BBR (return to CUBIC / fq_codel)"
+        echo -e "  ${GREEN}3)${NC} Refresh status"
+        echo -e "  ${YELLOW}0)${NC} Back"
+        echo ""
+        read -rp "  Select [0-3]: " option
+        case "$option" in
+            1) bbr_enable; read -rp "  Press Enter..." ;;
+            2) bbr_disable; read -rp "  Press Enter..." ;;
+            3) ;;
+            0) break ;;
+            *) echo "Invalid option"; read -rp "  Press Enter..." ;;
+        esac
+    done
 }
 menu_settings() {
     while true; do
