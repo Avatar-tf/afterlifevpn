@@ -945,6 +945,8 @@ update_script() {
         "setup/xray-user.sh"
         "setup/xray-add-vless.sh"
         "setup/xray-add-trojan.sh"
+        "setup/afterlife-port53-restore.sh"
+        "setup/afterlife-port53-restore.service"
     )
 
     local TMP_DIR="/tmp/afterlife_update"
@@ -973,6 +975,15 @@ update_script() {
         cp -f "$TMP_DIR"/menu/* /usr/local/afterlifevpn/menu/ 2>/dev/null
         cp -f "$TMP_DIR"/setup/* /usr/local/afterlifevpn/setup/ 2>/dev/null
         chmod +x /usr/local/afterlifevpn/menu/*.sh /usr/local/afterlifevpn/setup/*.sh
+        if bash -n /usr/local/afterlifevpn/setup/afterlife-port53-restore.sh; then
+            mkdir -p /usr/local/afterlifevpn/bin
+            install -m 755 /usr/local/afterlifevpn/setup/afterlife-port53-restore.sh /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh
+            install -m 644 /usr/local/afterlifevpn/setup/afterlife-port53-restore.service /etc/systemd/system/afterlife-port53-restore.service
+            systemctl daemon-reload
+            systemctl enable afterlife-port53-restore.service || echo 'Warning: Port 53 boot service could not be enabled'
+        else
+            echo 'Warning: Port 53 recovery script failed syntax validation'
+        fi
         echo -e "\n  ${GREEN}✓ Script now in latest version!${NC}\n"
     else
         echo -e "  ${RED}✗ Update aborted. Some files were missing on GitHub.${NC}"
