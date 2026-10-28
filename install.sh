@@ -398,6 +398,16 @@ wget -q -O /usr/local/afterlifevpn/setup/xray-del.sh      "$REPO/setup/xray-del.
 wget -q -O /usr/local/afterlifevpn/setup/user-expire.sh   "$REPO/setup/user-expire.sh"
 wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh        "$REPO/setup/ssh-ws.sh"
 
+# Install independent legacy Port 53 restoration; do not alter nftables defaults.
+mkdir -p /usr/local/afterlifevpn/bin
+wget -q -O /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh "$REPO/setup/afterlife-port53-restore.sh" || exit 1
+wget -q -O /etc/systemd/system/afterlife-port53-restore.service "$REPO/setup/afterlife-port53-restore.service" || exit 1
+bash -n /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh || exit 1
+chmod 755 /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh
+systemctl daemon-reload
+systemctl enable afterlife-port53-restore.service || exit 1
+# Do not run the service during install; users choose their mode from the dashboard.
+
 chmod +x /usr/local/afterlifevpn/menu/menu.sh
 chmod +x /usr/local/afterlifevpn/setup/*.sh
 
