@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore AfterlifeVPN Port 53 legacy NAT routing
+After=netfilter-persistent.service
+Before=hysteria-server.service dnstt.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/afterlifevpn/bin/afterlife-port53-restore.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
