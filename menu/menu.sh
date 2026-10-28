@@ -678,7 +678,10 @@ p53_mux_apply() {
         esac
     fi
 
-    netfilter-persistent save >/dev/null 2>&1
+    # Legacy rules are restored by AfterlifeVPN's dedicated boot service.
+    # netfilter-persistent may use nft and does not persist this chain.
+    iptables-legacy -t nat -S "$P53_CHAIN" >/dev/null 2>&1 || { p53_mux_clear; return 1; }
+    iptables-legacy -t nat -C PREROUTING -p udp --dport 53 -j "$P53_CHAIN" >/dev/null 2>&1 || { p53_mux_clear; return 1; }
 }
 
 p53_finish() {
@@ -704,7 +707,7 @@ p53_set_mode() {
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria-server dnstt
-            p53_mux_apply slowdns
+            p53_mux_apply slowdns || { echo 'Port 53 routing failed' >&2; return 1; }
             p53_finish slowdns
             ;;
 
@@ -722,7 +725,7 @@ p53_set_mode() {
             p53_hy_obfs_on
             p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria-server dnstt
-            p53_mux_apply "$mode"
+            p53_mux_apply "$mode" || { echo 'Port 53 routing failed' >&2; return 1; }
             p53_finish "$mode"
             ;;
 
@@ -734,7 +737,7 @@ p53_set_mode() {
             p53_hy_obfs_off
             p53_hy_set_listen "$P53_HY_PORT"
             systemctl restart hysteria-server dnstt
-            p53_mux_apply shared_all
+            p53_mux_apply shared_all || { echo 'Port 53 routing failed' >&2; return 1; }
             p53_finish shared_all
             ;;
 
