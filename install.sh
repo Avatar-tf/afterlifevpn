@@ -398,6 +398,20 @@ wget -q -O /usr/local/afterlifevpn/setup/xray-del.sh      "$REPO/setup/xray-del.
 wget -q -O /usr/local/afterlifevpn/setup/user-expire.sh   "$REPO/setup/user-expire.sh"
 wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh        "$REPO/setup/ssh-ws.sh"
 
+# Fresh-install integrity check: do not report success if essential dashboard
+# components could not be downloaded or contain invalid Bash syntax.
+for required_script in \
+    /usr/local/afterlifevpn/menu/menu.sh \
+    /usr/local/afterlifevpn/setup/hysteria-user.sh \
+    /usr/local/afterlifevpn/setup/slowdns.sh \
+    /usr/local/afterlifevpn/setup/user-monitor.sh \
+    /usr/local/afterlifevpn/setup/ssh-ws.sh; do
+    if [[ ! -s "$required_script" ]] || ! bash -n "$required_script"; then
+        echo "Download or syntax validation failed: $required_script" >&2
+        exit 1
+    fi
+done
+
 # Install independent legacy Port 53 restoration; do not alter nftables defaults.
 mkdir -p /usr/local/afterlifevpn/bin
 wget -q -O /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh "$REPO/setup/afterlife-port53-restore.sh" || exit 1
