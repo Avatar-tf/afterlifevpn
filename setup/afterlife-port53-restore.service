@@ -1,7 +1,7 @@
 [Unit]
 Description=Restore AfterlifeVPN Port 53 legacy NAT routing
 After=netfilter-persistent.service
-Before=hysteria-server.service dnstt.service
+Before=hysteria.service hysteria-server.service dnstt.service
 
 [Service]
 Type=oneshot
