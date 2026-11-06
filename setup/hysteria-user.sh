@@ -109,7 +109,7 @@ for line in lines:
 if record is None:
     sys.exit(1)
 try:
-    if datetime.now() > datetime.strptime(record[2], "%Y-%m-%d"):
+    if datetime.now().date() > datetime.strptime(record[2], "%Y-%m-%d").date():
         sys.exit(1)
 except ValueError:
     sys.exit(1)
