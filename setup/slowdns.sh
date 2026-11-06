@@ -268,7 +268,7 @@ else
 fi
 
 # Save the main domain back to config if it was updated
-if [[ "$MAIN_DOMAIN" != "$CURRENT_DOMAIN" && "$MAIN_DOMAIN" != "example.com" ]]; then
+if [[ "$MAIN_DOMAIN" != "${SOURCE_DOMAIN:-}" && "$MAIN_DOMAIN" != "example.com" ]]; then
     if grep -q "^DOMAIN=" "$CONFIG" 2>/dev/null; then
         sed -i "s/^DOMAIN=.*/DOMAIN=$MAIN_DOMAIN/" "$CONFIG"
     else
