@@ -379,28 +379,59 @@ systemctl start wg-quick@wg0
 # UDP 53 forwarding is exclusively managed by Option 11.
 netfilter-persistent save 2>/dev/null || true
 
-echo -e "\e[1;33m[7/8] Pulling Scripts from GitHub...\e[0m"
-REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
+echo -e "\e[1;33m[7/8] Downloading and validating the complete AFTERLIFE repository...\e[0m"
+INSTALL_SOURCE_TMP=$(mktemp -d /tmp/afterlife-install.XXXXXX) || exit 1
+INSTALL_ARCHIVE="$INSTALL_SOURCE_TMP/afterlifevpn-main.tar.gz"
+SOURCE_DIR="$INSTALL_SOURCE_TMP/source"
+mkdir -p "$SOURCE_DIR"
 
-wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/slowdns.sh "$REPO/setup/slowdns.sh"
-wget -q -O /usr/local/afterlifevpn/setup/dnstt-user.sh "$REPO/setup/dnstt-user.sh"
-wget -q -O /usr/local/afterlifevpn/setup/user-monitor.sh "$REPO/setup/user-monitor.sh"
-wget -q -O /usr/local/afterlifevpn/setup/user-monitor.py "$REPO/setup/user-monitor.py"
-wget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
-wget -q -O /usr/local/afterlifevpn/setup/squid.sh         "$REPO/setup/squid.sh"
-wget -q -O /usr/local/afterlifevpn/setup/dante.sh         "$REPO/setup/dante.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-add-vless.sh "$REPO/setup/xray-add-vless.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-add-trojan.sh "$REPO/setup/xray-add-trojan.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-online.sh   "$REPO/setup/xray-online.sh"
-wget -q -O /usr/local/afterlifevpn/setup/xray-del.sh      "$REPO/setup/xray-del.sh"
-wget -q -O /usr/local/afterlifevpn/setup/user-expire.sh   "$REPO/setup/user-expire.sh"
-wget -q -O /usr/local/afterlifevpn/setup/ssh-ws.sh        "$REPO/setup/ssh-ws.sh"
+if ! curl -fLsS --retry 3 --connect-timeout 10 --max-time 180 \
+    "https://codeload.github.com/Avatar-tf/afterlifevpn/tar.gz/refs/heads/main" \
+    -o "$INSTALL_ARCHIVE"; then
+    echo "Could not download the AFTERLIFE repository archive." >&2
+    exit 1
+fi
+if ! tar -tzf "$INSTALL_ARCHIVE" >/dev/null 2>&1 ||
+   ! tar -xzf "$INSTALL_ARCHIVE" --strip-components=1 -C "$SOURCE_DIR"; then
+    echo "The AFTERLIFE repository archive is invalid or could not be extracted." >&2
+    exit 1
+fi
 
-# Fresh-install integrity check: do not report success if essential dashboard
-# components could not be downloaded or contain invalid Bash syntax.
+for required_file in \
+    menu/menu.sh \
+    setup/xray-user.sh \
+    setup/hysteria-user.sh \
+    setup/slowdns.sh \
+    setup/dnstt-user.sh \
+    setup/user-monitor.sh \
+    setup/user-monitor.py \
+    setup/add-host.sh \
+    setup/squid.sh \
+    setup/dante.sh \
+    setup/xray-add-vless.sh \
+    setup/xray-add-trojan.sh \
+    setup/xray-online.sh \
+    setup/xray-del.sh \
+    setup/user-expire.sh \
+    setup/ssh-ws.sh \
+    setup/afterlife-port53-restore.sh \
+    setup/afterlife-port53-restore.service; do
+    if [[ ! -s "$SOURCE_DIR/$required_file" ]]; then
+        echo "Required repository file missing: $required_file" >&2
+        exit 1
+    fi
+done
+
+while IFS= read -r -d '' script; do
+    if ! bash -n "$script"; then
+        echo "Bash syntax validation failed: $script" >&2
+        exit 1
+    fi
+done < <(find "$SOURCE_DIR/menu" "$SOURCE_DIR/setup" -type f -name '*.sh' -print0)
+
+cp -a "$SOURCE_DIR/menu/." /usr/local/afterlifevpn/menu/ || exit 1
+cp -a "$SOURCE_DIR/setup/." /usr/local/afterlifevpn/setup/ || exit 1
+
 for required_script in \
     /usr/local/afterlifevpn/menu/menu.sh \
     /usr/local/afterlifevpn/setup/hysteria-user.sh \
@@ -409,20 +440,21 @@ for required_script in \
     /usr/local/afterlifevpn/setup/user-monitor.sh \
     /usr/local/afterlifevpn/setup/ssh-ws.sh; do
     if [[ ! -s "$required_script" ]] || ! bash -n "$required_script"; then
-        echo "Download or syntax validation failed: $required_script" >&2
+        echo "Install copy or syntax validation failed: $required_script" >&2
         exit 1
     fi
 done
 
 # Install independent legacy Port 53 restoration; do not alter nftables defaults.
 mkdir -p /usr/local/afterlifevpn/bin
-wget -q -O /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh "$REPO/setup/afterlife-port53-restore.sh" || exit 1
-wget -q -O /etc/systemd/system/afterlife-port53-restore.service "$REPO/setup/afterlife-port53-restore.service" || exit 1
+install -m 755 "$SOURCE_DIR/setup/afterlife-port53-restore.sh" /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh || exit 1
+install -m 644 "$SOURCE_DIR/setup/afterlife-port53-restore.service" /etc/systemd/system/afterlife-port53-restore.service || exit 1
 bash -n /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh || exit 1
 chmod 755 /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh
 systemctl daemon-reload
 systemctl enable afterlife-port53-restore.service || exit 1
 # Do not run the service during install; users choose their mode from the dashboard.
+rm -rf "$INSTALL_SOURCE_TMP"
 
 chmod +x /usr/local/afterlifevpn/menu/menu.sh
 chmod +x /usr/local/afterlifevpn/setup/*.sh
