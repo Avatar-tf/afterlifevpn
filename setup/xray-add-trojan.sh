@@ -13,9 +13,9 @@ RED='\033[1;31m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-fail() { echo -e "\${RED}Error: $*\${NC}" >&2; exit 1; }
+fail() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 
-[[ \${EUID:-$(id -u)} -eq 0 ]] || fail "Run this account manager as root."
+[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run this account manager as root."
 command -v jq >/dev/null 2>&1 || fail "jq is required. Install it with: apt-get install -y jq"
 command -v openssl >/dev/null 2>&1 || fail "openssl is required."
 [[ -s "$CONFIG" ]] || fail "Xray config not found at $CONFIG. Install/configure Xray first."
@@ -34,15 +34,15 @@ fi
 create_trojan_user() {
     local username days expiry created password tmp backup link
     read -r -p "  Username: " username
-    [[ "$username" =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || { echo -e "\${RED}Use 1-32 letters, numbers, dot, underscore or hyphen.\${NC}"; return 1; }
+    [[ "$username" =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || { echo -e "${RED}Use 1-32 letters, numbers, dot, underscore or hyphen.${NC}"; return 1; }
     if awk -F'|' -v u="$username" '$1==u {found=1} END {exit !found}' "$DB"; then
-        echo -e "\${RED}That username already exists in the Xray user database.\${NC}"
+        echo -e "${RED}That username already exists in the Xray user database.${NC}"
         return 1
     fi
 
     read -r -p "  Expiry (days) [30]: " days
-    days=\${days:-30}
-    [[ "$days" =~ ^[1-9][0-9]{0,3}$ ]] || { echo -e "\${RED}Enter a whole number from 1 to 9999.\${NC}"; return 1; }
+    days=${days:-30}
+    [[ "$days" =~ ^[1-9][0-9]{0,3}$ ]] || { echo -e "${RED}Enter a whole number from 1 to 9999.${NC}"; return 1; }
     expiry=$(date -d "+$days days" +%Y-%m-%d) || return 1
     created=$(date +%Y-%m-%d)
     password=$(openssl rand -hex 16) || fail "Could not generate a Trojan password."
@@ -78,15 +78,15 @@ create_trojan_user() {
     printf '%s|%s|%s|%s\n' "$username" "$password" "$expiry" "$created" >> "$DB"
 
     echo
-    echo -e "\${GREEN}========== TROJAN ACCOUNT CREATED ==========\${NC}"
+    echo -e "${GREEN}========== TROJAN ACCOUNT CREATED ==========${NC}"
     printf 'Username : %s\nPassword : %s\nExpires  : %s\n' "$username" "$password" "$expiry"
     echo "Protocol : Trojan over WebSocket + TLS"
     echo "Port     : 443 (Nginx front end)"
     echo "WS Path  : /trojan"
     echo "Local    : 127.0.0.1:10003"
-    echo "SNI/Host : \${DOMAIN_HOST:-Set your domain in config.conf}"
+    echo "SNI/Host : ${DOMAIN_HOST:-Set your domain in config.conf}"
     if [[ -n "$DOMAIN_HOST" ]]; then
-        link="trojan://\${password}@\${DOMAIN_HOST}:443?security=tls&sni=\${DOMAIN_HOST}&type=ws&host=\${DOMAIN_HOST}&path=%2Ftrojan#\${username}-AFTERLIFE"
+        link="trojan://${password}@${DOMAIN_HOST}:443?security=tls&sni=${DOMAIN_HOST}&type=ws&host=${DOMAIN_HOST}&path=%2Ftrojan#${username}-AFTERLIFE"
         echo
         echo "Trojan Link:"
         echo "$link"
@@ -97,15 +97,15 @@ create_trojan_user() {
     else
         echo "Set DOMAIN in $APP_CONFIG to generate a shareable link."
     fi
-    echo -e "\${GREEN}============================================\${NC}"
+    echo -e "${GREEN}============================================${NC}"
 }
 
 list_trojan_users() {
-    echo -e "\${CYAN}Trojan accounts\${NC}"
+    echo -e "${CYAN}Trojan accounts${NC}"
     local found=0 username password expiry created
     while IFS='|' read -r username password expiry created; do
         [[ -n "$username" && -n "$password" ]] || continue
-        printf '%-20s Expiry: %-12s Created: %s\n' "$username" "\${expiry:-unknown}" "\${created:-unknown}"
+        printf '%-20s Expiry: %-12s Created: %s\n' "$username" "${expiry:-unknown}" "${created:-unknown}"
         found=1
     done < "$DB"
     [[ "$found" -eq 1 ]] || echo "No Trojan accounts found in the shared Xray database."
@@ -116,7 +116,7 @@ delete_trojan_user() {
     read -r -p "  Trojan username to delete: " username
     [[ -n "$username" ]] || return 1
     password=$(awk -F'|' -v u="$username" '$1==u {print $2; exit}' "$DB")
-    [[ -n "$password" ]] || { echo -e "\${RED}Trojan account not found.\${NC}"; return 1; }
+    [[ -n "$password" ]] || { echo -e "${RED}Trojan account not found.${NC}"; return 1; }
 
     jq -e 'any(.inbounds[]?; .protocol=="trojan" and .streamSettings.network=="ws")' "$CONFIG" >/dev/null ||
         fail "Trojan WebSocket inbound is missing; database was not changed."
@@ -143,14 +143,14 @@ delete_trojan_user() {
     awk -F'|' -v u="$username" '$1!=u' "$DB" > "$DB.tmp"
     cat "$DB.tmp" > "$DB"
     rm -f "$DB.tmp"
-    echo -e "\${GREEN}Deleted Trojan account: $username\${NC}"
+    echo -e "${GREEN}Deleted Trojan account: $username${NC}"
 }
 
 while true; do
     clear
-    echo -e "\${CYAN}╔════════════════════════════════════════════════════════╗\${NC}"
-    echo -e "\${CYAN}║\${NC}\${WHITE}              XRAY - TROJAN ACCOUNT MANAGER              \${NC}\${CYAN}║\${NC}"
-    echo -e "\${CYAN}╚════════════════════════════════════════════════════════╝\${NC}"
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}${WHITE}              XRAY - TROJAN ACCOUNT MANAGER              ${NC}${CYAN}║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════╝${NC}"
     echo
     echo "1) Create Trojan account"
     echo "2) List Trojan accounts"
@@ -163,7 +163,7 @@ while true; do
         2) list_trojan_users ;;
         3) delete_trojan_user ;;
         0) exit 0 ;;
-        *) echo -e "\${RED}Invalid option.\${NC}" ;;
+        *) echo -e "${RED}Invalid option.${NC}" ;;
     esac
     echo
     read -r -p "Press Enter to continue..." _
