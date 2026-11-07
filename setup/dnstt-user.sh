@@ -51,7 +51,7 @@ load_config() {
   if [[ -r /etc/systemd/system/badvpn.service ]]; then
     local port
     port=$(sed -n 's/.*--listen-addr[[:space:]]*127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' /etc/systemd/system/badvpn.service | head -n1)
-    [[ -n $port ]] && UDPGW_PORT=$port
+    [[ -n $port ]] && UDPGW_PORT=$port || true
   fi
 }
 valid_resolver() {
@@ -74,6 +74,9 @@ dns_ready() {
   fi
   if ! systemctl is-active --quiet dropbear.service; then
     echo -e "  $RED Dropbear backend is not running.$NC"; bad=1
+  fi
+  if [[ -n $BACKEND_PORT && $BACKEND_PORT != "$DROPBEAR_PORT" ]]; then
+    echo -e "  $RED DNSTT backend port ($BACKEND_PORT) does not match Dropbear port ($DROPBEAR_PORT). Fix the service before creating accounts.$NC"; bad=1
   fi
   (( bad == 0 ))
 }
@@ -152,13 +155,17 @@ create_account() {
   if ! printf '%s|%s|%s|%s|%s|%s\n' "$username" "$password" "$expiry" "$created" "$devices" "$quota" >> "$SSH_DB"; then
     userdel "$username" 2>/dev/null || true; echo -e "  $RED Could not save user record; account rolled back.$NC"; pause; return
   fi
-  printf '%s\n' "$resolver" > "$RESOLVER_FILE"; chmod 600 "$RESOLVER_FILE"
+  if ! printf '%s\n' "$resolver" > "$RESOLVER_FILE"; then
+    echo -e "  $YELLOW Warning: could not save the resolver preference; account was created.$NC"
+  else
+    chmod 600 "$RESOLVER_FILE"
+  fi
   header
   echo -e "  $GREEN DNSTT ACCOUNT CREATED$NC\n"
   echo -e "  Username        : $GREEN$username$NC"
   echo -e "  Password        : $GREEN$password$NC"
   echo -e "  Expires         : $YELLOW$expiry$NC"
-  echo -e "  Max devices     : $devices"
+  echo -e "  Max devices     : $devices $CYAN(metadata only; not enforced by current SSH backend)$NC"
   echo -e "  Data quota      : $quota $CYAN(metadata only; quota enforcement is not implemented)$NC\n"
   show_config
   echo -e "\n  $YELLOW These credentials also work for ordinary SSH. The DNSTT public key is shared by all users.$NC"
@@ -195,8 +202,12 @@ delete_account() {
   fi
   read -r -p "  Type DELETE to confirm: " confirm
   [[ $confirm == DELETE ]] || { echo "  Cancelled."; pause; return; }
-  pkill -u "$username" 2>/dev/null || true
-  userdel -r "$username" 2>/dev/null || true
+  if id "$username" >/dev/null 2>&1; then
+    pkill -u "$username" 2>/dev/null || true
+    if ! userdel -r "$username" 2>/dev/null; then
+      echo -e "  $RED userdel failed; account record was not removed.$NC"; pause; return
+    fi
+  fi
   tmp=$(mktemp); awk -F'|' -v u="$username" '$1!=u' "$SSH_DB" > "$tmp"; cat "$tmp" > "$SSH_DB"; rm -f "$tmp"
   if [[ -f /etc/squid/passwd ]] && command -v htpasswd >/dev/null 2>&1; then htpasswd -D /etc/squid/passwd "$username" >/dev/null 2>&1 || true; fi
   echo -e "  $GREEN Shared SSH/DNSTT account deleted.$NC"; pause
