@@ -999,10 +999,25 @@ update_script() {
         fi
     done < <(find "$SOURCE_DIR/menu" "$SOURCE_DIR/setup" -type f -name '*.sh' -print0)
 
-    BACKUP_DIR="/root/afterlife-backup/update-$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-    [[ ! -d "$APP_DIR/menu" ]] || cp -a "$APP_DIR/menu" "$BACKUP_DIR/"
-    [[ ! -d "$APP_DIR/setup" ]] || cp -a "$APP_DIR/setup" "$BACKUP_DIR/"
+    mkdir -p /root/afterlife-backup || {
+        echo -e "  ${RED}Could not create the rollback backup directory. Update cancelled.${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
+    }
+    BACKUP_DIR=$(mktemp -d /root/afterlife-backup/update.XXXXXX) || {
+        echo -e "  ${RED}Could not create a rollback backup. Update cancelled.${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
+    }
+    if { [[ -d "$APP_DIR/menu" ]] && ! cp -a "$APP_DIR/menu" "$BACKUP_DIR/"; } ||
+       { [[ -d "$APP_DIR/setup" ]] && ! cp -a "$APP_DIR/setup" "$BACKUP_DIR/"; }; then
+        echo -e "  ${RED}Could not back up the current scripts. Update cancelled safely.${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
+    fi
 
     if ! mkdir -p "$APP_DIR/menu" "$APP_DIR/setup" ||
        ! cp -a "$SOURCE_DIR/menu/." "$APP_DIR/menu/" ||
