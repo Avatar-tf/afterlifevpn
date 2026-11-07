@@ -164,7 +164,8 @@ show_dashboard() {
     echo -e "${CYAN}│${NC}  ${GREEN}3)${NC} Hysteria 2 (QUIC)          ${GREEN}8)${NC} Settings & Logs        ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}4)${NC} WireGuard VPN              ${GREEN}9)${NC} Bot & Backup           ${CYAN}│${NC}"
     echo -e "${CYAN}│${NC}  ${GREEN}5)${NC} L2TP / IPsec VPN        ${GREEN}10)${NC} Domain & Cert            ${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}"
+    echo -e "${CYAN}│${NC} ${GREEN}11)${NC} Port 53 Toggle (SlowDNS / Hysteria)                 ${CYAN}│${NC}
+    echo -e "${CYAN}│${NC} ${GREEN}12)${NC} DNS Features (DNSTT Account Management)              ${CYAN}│${NC}"
     echo -e "${CYAN}╰────────────────────────────────────────────────────────╯${NC}"
     echo -e "  ${YELLOW}M)${NC} User Monitor (Read Only)"
     echo -e "  ${YELLOW}U)${NC} Update AFTERLIFE   ${YELLOW}V)${NC} Full Diagnostics   ${YELLOW}X)${NC} Exit"
@@ -949,6 +950,7 @@ update_script() {
     local FILES=(
         "menu/menu.sh"
         "setup/slowdns.sh"
+        "setup/dnstt-user.sh"
         "setup/user-monitor.sh"
         "setup/user-monitor.py"
         "setup/add-host.sh"
@@ -1056,7 +1058,7 @@ esac
 
 while true; do
     show_dashboard
-    read -p "  Select Option [1-11 / M / U / V / X]: " option
+    read -p "  Select Option [1-12 / M / U / V / X]: " option
     case $option in
         1) menu_ssh ;;
         2) menu_xray ;;
@@ -1069,6 +1071,7 @@ while true; do
         9) menu_backup ;;
         10) menu_domain ;;
         11) menu_port53 ;;
+        12) bash /usr/local/afterlifevpn/setup/dnstt-user.sh ;;
         M|m) run_user_monitor ;;
         U|u) update_script ;;
         V|v) full_diagnostics ;;

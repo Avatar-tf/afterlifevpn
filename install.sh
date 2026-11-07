@@ -386,6 +386,7 @@ wget -q -O /usr/local/afterlifevpn/menu/menu.sh          "$REPO/menu/menu.sh"
 wget -q -O /usr/local/afterlifevpn/setup/xray-user.sh     "$REPO/setup/xray-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/hysteria-user.sh "$REPO/setup/hysteria-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/slowdns.sh "$REPO/setup/slowdns.sh"
+wget -q -O /usr/local/afterlifevpn/setup/dnstt-user.sh "$REPO/setup/dnstt-user.sh"
 wget -q -O /usr/local/afterlifevpn/setup/user-monitor.sh "$REPO/setup/user-monitor.sh"
 wget -q -O /usr/local/afterlifevpn/setup/user-monitor.py "$REPO/setup/user-monitor.py"
 wget -q -O /usr/local/afterlifevpn/setup/add-host.sh "$REPO/setup/add-host.sh"
@@ -404,6 +405,7 @@ for required_script in \
     /usr/local/afterlifevpn/menu/menu.sh \
     /usr/local/afterlifevpn/setup/hysteria-user.sh \
     /usr/local/afterlifevpn/setup/slowdns.sh \
+    /usr/local/afterlifevpn/setup/dnstt-user.sh \
     /usr/local/afterlifevpn/setup/user-monitor.sh \
     /usr/local/afterlifevpn/setup/ssh-ws.sh; do
     if [[ ! -s "$required_script" ]] || ! bash -n "$required_script"; then
