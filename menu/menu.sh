@@ -944,69 +944,105 @@ menu_domain() {
 
 update_script() {
     show_header "› System › Update"
-    echo -e "  ${YELLOW}Checking for updates from GitHub...${NC}\n"
+    echo -e "  ${YELLOW}Downloading the complete latest AFTERLIFE source...${NC}\n"
 
-    local REPO="https://raw.githubusercontent.com/Avatar-tf/afterlifevpn/main"
-    local FILES=(
-        "menu/menu.sh"
-        "setup/slowdns.sh"
-        "setup/dnstt-user.sh"
-        "setup/user-monitor.sh"
-        "setup/user-monitor.py"
-        "setup/add-host.sh"
-        "setup/hysteria-user.sh"
-        "setup/hysteria.sh"
-        "setup/xray-user.sh"
-        "setup/xray-add-vless.sh"
-        "setup/xray-add-trojan.sh"
-        "setup/afterlife-port53-restore.sh"
-        "setup/afterlife-port53-restore.service"
-    )
+    local APP_DIR="/usr/local/afterlifevpn"
+    local ARCHIVE_URL="https://codeload.github.com/Avatar-tf/afterlifevpn/tar.gz/refs/heads/main"
+    local WORK_DIR ARCHIVE SOURCE_DIR BACKUP_DIR script
+    WORK_DIR=$(mktemp -d /tmp/afterlife-update.XXXXXX) || {
+        echo -e "  ${RED}Could not create update workspace.${NC}"
+        read -p "  Press enter to return..."
+        return 1
+    }
+    ARCHIVE="$WORK_DIR/afterlifevpn-main.tar.gz"
+    SOURCE_DIR="$WORK_DIR/source"
 
-    local TMP_DIR="/tmp/afterlife_update"
-    mkdir -p "$TMP_DIR/menu" "$TMP_DIR/setup"
-    local HAS_ERROR=0
+    if ! curl -fLsS --retry 3 --connect-timeout 10 --max-time 180 "$ARCHIVE_URL" -o "$ARCHIVE"; then
+        echo -e "  ${RED}Download failed. Your installed files were not changed.${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
+    fi
 
-    for file in "${FILES[@]}"; do
-        echo -en "  ${WHITE}Checking ${file}... ${NC}"
-        if curl -f -sL "$REPO/$file" -o "$TMP_DIR/$file"; then
-            if [[ -s "$TMP_DIR/$file" ]]; then
-                echo -e "${GREEN}OK${NC}"
-            else
-                echo -e "${RED}Failed (Empty File)${NC}"
-                HAS_ERROR=1
-            fi
-        else
-            echo -e "${RED}Failed (Not Found on GitHub)${NC}"
-            HAS_ERROR=1
+    if ! tar -tzf "$ARCHIVE" >/dev/null 2>&1 || ! mkdir -p "$SOURCE_DIR" ||
+       ! tar -xzf "$ARCHIVE" --strip-components=1 -C "$SOURCE_DIR"; then
+        echo -e "  ${RED}Repository archive is invalid or could not be extracted.${NC}"
+        echo -e "  ${WHITE}Your installed files were not changed.${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
+    fi
+
+    local required
+    for required in \
+        "$SOURCE_DIR/menu/menu.sh" \
+        "$SOURCE_DIR/setup/slowdns.sh" \
+        "$SOURCE_DIR/setup/dnstt-user.sh" \
+        "$SOURCE_DIR/setup/afterlife-port53-restore.sh" \
+        "$SOURCE_DIR/setup/afterlife-port53-restore.service"; do
+        if [[ ! -s "$required" ]]; then
+            echo -e "  ${RED}Required repository file is missing: ${required#"$SOURCE_DIR"/}${NC}"
+            echo -e "  ${WHITE}Your installed files were not changed.${NC}"
+            rm -rf "$WORK_DIR"
+            read -p "  Press enter to return..."
+            return 1
         fi
     done
 
-    echo -e "\n  ${CYAN}──────────────────────────────────────────────────────${NC}"
-
-    if [[ $HAS_ERROR -eq 0 ]]; then
-        echo -e "  ${YELLOW}Applying updates to system...${NC}"
-        cp -f "$TMP_DIR"/menu/* /usr/local/afterlifevpn/menu/ 2>/dev/null
-        cp -f "$TMP_DIR"/setup/* /usr/local/afterlifevpn/setup/ 2>/dev/null
-        chmod +x /usr/local/afterlifevpn/menu/*.sh /usr/local/afterlifevpn/setup/*.sh
-        if bash -n /usr/local/afterlifevpn/setup/afterlife-port53-restore.sh; then
-            mkdir -p /usr/local/afterlifevpn/bin
-            install -m 755 /usr/local/afterlifevpn/setup/afterlife-port53-restore.sh /usr/local/afterlifevpn/bin/afterlife-port53-restore.sh
-            install -m 644 /usr/local/afterlifevpn/setup/afterlife-port53-restore.service /etc/systemd/system/afterlife-port53-restore.service
-            systemctl daemon-reload
-            systemctl enable afterlife-port53-restore.service || echo 'Warning: Port 53 boot service could not be enabled'
-        else
-            echo 'Warning: Port 53 recovery script failed syntax validation'
+    while IFS= read -r -d '' script; do
+        if ! bash -n "$script"; then
+            echo -e "  ${RED}Syntax validation failed: ${script#"$SOURCE_DIR"/}${NC}"
+            echo -e "  ${WHITE}Your installed files were not changed.${NC}"
+            rm -rf "$WORK_DIR"
+            read -p "  Press enter to return..."
+            return 1
         fi
-        echo -e "\n  ${GREEN}✓ Script now in latest version!${NC}\n"
-    else
-        echo -e "  ${RED}✗ Update aborted. Some files were missing on GitHub.${NC}"
-        echo -e "  ${WHITE}Your current server files were not modified.${NC}\n"
+    done < <(find "$SOURCE_DIR/menu" "$SOURCE_DIR/setup" -type f -name '*.sh' -print0)
+
+    BACKUP_DIR="/root/afterlife-backup/update-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_DIR"
+    [[ ! -d "$APP_DIR/menu" ]] || cp -a "$APP_DIR/menu" "$BACKUP_DIR/"
+    [[ ! -d "$APP_DIR/setup" ]] || cp -a "$APP_DIR/setup" "$BACKUP_DIR/"
+
+    if ! mkdir -p "$APP_DIR/menu" "$APP_DIR/setup" ||
+       ! cp -a "$SOURCE_DIR/menu/." "$APP_DIR/menu/" ||
+       ! cp -a "$SOURCE_DIR/setup/." "$APP_DIR/setup/"; then
+        echo -e "  ${RED}Applying update failed. Attempting to restore the previous scripts...${NC}"
+        rm -rf "$APP_DIR/menu" "$APP_DIR/setup"
+        [[ ! -d "$BACKUP_DIR/menu" ]] || cp -a "$BACKUP_DIR/menu" "$APP_DIR/"
+        [[ ! -d "$BACKUP_DIR/setup" ]] || cp -a "$BACKUP_DIR/setup" "$APP_DIR/"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to return..."
+        return 1
     fi
 
-    rm -rf "$TMP_DIR"
+    chmod +x "$APP_DIR"/menu/*.sh "$APP_DIR"/setup/*.sh 2>/dev/null || true
+
+    if ! install -D -m 755 "$APP_DIR/setup/afterlife-port53-restore.sh" \
+            "$APP_DIR/bin/afterlife-port53-restore.sh" ||
+       ! install -D -m 644 "$APP_DIR/setup/afterlife-port53-restore.service" \
+            /etc/systemd/system/afterlife-port53-restore.service; then
+        echo -e "  ${RED}Port 53 restore integration could not be installed.${NC}"
+        echo -e "  ${WHITE}The script files were updated; backup: ${BACKUP_DIR}${NC}"
+        rm -rf "$WORK_DIR"
+        read -p "  Press enter to restart menu..."
+        exec "$APP_DIR/menu/menu.sh" "$@"
+    fi
+
+    systemctl daemon-reload
+    systemctl enable afterlife-port53-restore.service || \
+        echo -e "  ${YELLOW}Warning: could not enable Port 53 restore service.${NC}"
+
+    local script_count
+    script_count=$(find "$APP_DIR/menu" "$APP_DIR/setup" -type f | wc -l)
+    echo -e "\n  ${GREEN}✓ Complete repository update applied successfully.${NC}"
+    echo -e "  ${WHITE}Updated repository files: ${script_count}${NC}"
+    echo -e "  ${WHITE}Rollback backup: ${BACKUP_DIR}${NC}"
+    echo -e "  ${WHITE}New files are included automatically; no manual file list is needed.${NC}\n"
+
+    rm -rf "$WORK_DIR"
     read -p "  Press enter to restart menu..."
-    exec /usr/local/afterlifevpn/menu/menu.sh "$@"
+    exec "$APP_DIR/menu/menu.sh" "$@"
 }
 
 run_user_monitor() {
