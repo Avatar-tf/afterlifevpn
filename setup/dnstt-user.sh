@@ -189,7 +189,7 @@ delete_account() {
   echo -e "  $YELLOW This also deletes the same user's ordinary SSH access.$NC\n"
   local username confirm tmp
   read -r -p "  Username: " username
-  [[ -n $username ]] || return
+  [[ -n $username ]] || return 0
   if ! awk -F'|' -v u="$username" '$1==u{f=1}END{exit !f}' "$SSH_DB" 2>/dev/null; then
     echo -e "  $RED No matching SSH account record.$NC"; pause; return
   fi
